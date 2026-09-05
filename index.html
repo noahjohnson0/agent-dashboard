@@ -122,8 +122,13 @@ tailwind.config = {
   .msg{white-space:pre-wrap;word-break:break-word}
   .dots::after{content:"";animation:d 1.2s steps(4,end) infinite}
   @keyframes rowin{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-  #list li{animation:rowin .28s cubic-bezier(.2,.7,.3,1) both}
-  @media (prefers-reduced-motion:reduce){#list li{animation:none}}
+  @keyframes rowtouch{0%{background:hsl(var(--accent))}100%{background:transparent}}
+  /* a first paint cascades in; a refresh must not, or the whole list flashes */
+  #list[data-anim="cascade"] li{animation:rowin .28s cubic-bezier(.2,.7,.3,1) both}
+  #list[data-anim="update"] li.changed{animation:rowtouch 1.4s ease-out both}
+  #refresh.spin svg{animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){#list li{animation:none!important}}
   .skel{background:linear-gradient(90deg,hsl(var(--muted)) 25%,hsl(var(--accent)) 37%,hsl(var(--muted)) 63%);
     background-size:400% 100%;animation:sk 1.4s ease infinite;border-radius:6px;height:10px}
   @keyframes sk{0%{background-position:100% 0}100%{background-position:0 0}}
@@ -398,15 +403,27 @@ function statusChip(i){
     <span class="dot" style="background:${color}"></span>${esc(text)}</span>`;
 }
 
-function render(){
+let listSig = "", rowSigs = {};
+const rowSig = i => [i.updatedAt, i.status, i.agentId, i.comments?.length,
+                     i.labels.map(l => l.name).join(","), i.title].join("|");
+
+function render(mode = "cascade"){
   const q = $("#q").value.toLowerCase();
   const rows = data.filter(i => !q ||
     (i.number + " " + i.title + " " + (i.author?.login||"") + " " + i.labels.map(l=>l.name).join(" "))
       .toLowerCase().includes(q));
+  const sig = rows.map(i => i.number + rowSig(i)).join(";") + "//" + q;
+  if (mode === "update" && sig === listSig) return;      // nothing moved, touch nothing
+  const changed = {};
+  if (mode === "update") for (const i of rows) changed[i.number] = rowSigs[i.number] !== rowSig(i);
+  listSig = sig;
+  rowSigs = Object.fromEntries(rows.map(i => [i.number, rowSig(i)]));
+
   $("#count").textContent = rows.length + (rows.length === 1 ? " issue" : " issues");
+  $("#list").dataset.anim = mode;
   $("#list").innerHTML = rows.length ? rows.map((i, idx) => `
-    <li class="row flex items-baseline gap-3 rounded-md border-t border-border px-2 py-2.5"
-        style="animation-delay:${Math.min(idx * 28, 700)}ms">
+    <li class="row flex items-baseline gap-3 rounded-md border-t border-border px-2 py-2.5${changed[i.number] ? " changed" : ""}"
+        style="animation-delay:${mode === "cascade" ? Math.min(idx * 28, 700) : 0}ms">
       <span class="w-11 shrink-0 font-mono text-xs text-muted-foreground">#${i.number}</span>
       <span class="min-w-0 flex-1">
         <a class="hover:underline" href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a>
@@ -422,6 +439,7 @@ function render(){
 }
 
 function skeleton(){
+  listSig = ""; rowSigs = {};
   $("#count").innerHTML = '<span class="dots">Fetching issues from GitHub</span>';
   $("#list").innerHTML = Array.from({length: 7}, (_, i) => `
     <li class="flex items-center gap-3 border-t border-border px-2 py-3.5" style="animation-delay:${i*40}ms">
@@ -443,17 +461,20 @@ function listError(msg){
 async function loadIssues({force = false} = {}){
   const state = ui.issueState;
   const cached = issueCache[state];
-  if (cached) { data = cached; render(); } else skeleton();
+  if (cached) { data = cached; render("update"); } else skeleton();
   if (!force && cached && Date.now() - (fetchedAt[state] || 0) < 15000) return;
+  $("#refresh").classList.add("spin");
   let fresh;
   try { fresh = await api("/api/issues?state=" + state); }
   catch (e) { if (!cached) listError("Could not reach the dashboard server."); return; }
+  finally { $("#refresh").classList.remove("spin"); }
   if (!Array.isArray(fresh)) {                 // {"error": ...} from gh — never cache it
     if (!cached) listError(fresh?.error || "GitHub request failed.");
     return;
   }
   issueCache[state] = fresh; fetchedAt[state] = Date.now();
-  if (ui.issueState === state) { data = fresh; render(); }
+  // a list already on screen is updated in place; only a fresh one cascades
+  if (ui.issueState === state) { data = fresh; render(cached ? "update" : "cascade"); }
 }
 window.loadIssues = loadIssues;
 
@@ -467,9 +488,11 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && ui.tab === "issues" &&
       Date.now() - (fetchedAt[ui.issueState] || 0) > 60000) loadIssues({force: true});
 });
-$("#q").oninput = render;
+$("#q").oninput = () => render("update");
 $("#refresh").onclick = () => { fetchedAt[ui.issueState] = 0; loadTab(true); };
-$$("#stateGroup .btn").forEach(b => b.onclick = () => { ui.issueState = b.dataset.state; applyUI(); loadIssues(); });
+$$("#stateGroup .btn").forEach(b => b.onclick = () => {
+  ui.issueState = b.dataset.state; applyUI(); listSig = ""; rowSigs = {}; loadIssues();
+});
 
 /* ---------------- charts (dataviz: 2px lines, one axis, legend + hover) ------- */
 function lineChart({series, labels, height = 140, fmt = v => v}){
