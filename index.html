@@ -176,7 +176,7 @@ tailwind.config = {
           <svg class="i" viewBox="0 0 24 24"><path d="m6 3 14 9-14 9Z"/></svg>Launch</button>
         <button id="tests" class="btn btn-sm" hidden title="Run the configured test suites">
           <svg class="i" viewBox="0 0 24 24"><path d="M9 3h6"/><path d="M10 3v6.5L5 20a1 1 0 0 0 .9 1.5h12.2A1 1 0 0 0 19 20l-5-10.5V3"/></svg>Run tests</button>
-        <button id="killGodot" class="btn btn-sm" hidden title="Terminate every matching process on this machine">
+        <button id="killBtn" class="btn btn-sm" hidden title="Terminate every matching process on this machine">
           <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Kill</button>
         <span id="count" class="ml-auto text-xs text-muted-foreground"></span>
       </div>
@@ -260,7 +260,7 @@ const DEF = {dock:"right", pinned:"1", hidden:"0", main:"1", w:"420px", h:"48%",
              provider:"claude", mode:"plan", model:"", issueState:"open", tab:"issues", pview:"chat",
              tabs: [], active: null};
 let ui = {...DEF};
-try { ui = {...DEF, ...JSON.parse(localStorage.getItem("swordPanel") || "{}")}; } catch(e){}
+try { ui = {...DEF, ...JSON.parse(localStorage.getItem("agentDashboardUI") || "{}")}; } catch(e){}
 
 function applyUI(){
   app.dataset.dock = ui.dock; app.dataset.pinned = ui.pinned; app.dataset.hidden = ui.hidden;
@@ -277,7 +277,7 @@ function applyUI(){
   $("#expand").hidden = ui.main === "1";
   $("#pin").hidden = $("#dockGroup").hidden = ui.main === "0";
   if ($("#model").value !== ui.model) $("#model").value = ui.model;
-  try { localStorage.setItem("swordPanel", JSON.stringify(ui)); } catch(e){}
+  try { localStorage.setItem("agentDashboardUI", JSON.stringify(ui)); } catch(e){}
 }
 $$("#dockGroup .btn").forEach(b => b.onclick = () => { ui.dock = b.dataset.dock; applyUI(); });
 $$("#providerGroup .btn").forEach(b => b.onclick = () => { ui.provider = b.dataset.provider; applyUI(); });
@@ -317,8 +317,8 @@ api("/api/me").then(me => {
   const c = me.config || {};
   $("#launch").hidden = !(c.launch && c.launch.length);
   $("#tests").hidden = !(c.suites && c.suites.length);
-  $("#killGodot").hidden = !c.killPattern;
-  $("#killGodot").lastChild.textContent = "Kill " + (c.killPattern || "");
+  $("#killBtn").hidden = !c.killPattern;
+  $("#killBtn").lastChild.textContent = "Kill " + (c.killPattern || "");
   $$("#tabs .btn").find(b => b.dataset.tab === "roadmap").hidden = !c.tracker;
 });
 
@@ -743,7 +743,7 @@ window.dismissAgent = async id => {
 };
 $("#launch").onclick = () => task("launch");
 $("#tests").onclick = () => task("tests");
-$("#killGodot").onclick = () => task("kill");
+$("#killBtn").onclick = () => task("kill");
 
 /* ---------------- composer (with screenshots) ---------------- */
 async function attachImage(file){
