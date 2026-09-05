@@ -16,8 +16,9 @@ python3 server.py     # then open http://localhost:8787
 `todo`, `claimed by <user>`, `agent dispatched`, `agent working`, `in review (PR #n)`.
 The list caches locally, refreshes every 60s while visible, and cascades in.
 
-**Dispatch an agent.** Hover an issue, hit the bot icon. The dashboard hands the
-issue to `claude` or `codex` and opens a chat tab for it. Several agents can run
+**Dispatch an agent.** Choose Claude or Codex and Plan or Build above the list,
+then press the robot button on an issue. The dashboard hands the issue to that
+CLI and opens a chat tab for it. Several agents can run
 at once, one tab each, with a vertical stage checklist at the top of the chat
 showing what is done, what is running, and what is still ahead.
 
@@ -84,6 +85,16 @@ override, create `config.json` in the state directory:
     ["e2e", "npx", "playwright", "test"]
   ]
 }
+```
+
+`launch` takes either a bare command or, when something has to happen first,
+a list of named steps run in order — they stop at the first failure:
+
+```json
+"launch": [
+  ["build", "npm", "run", "build"],
+  ["dev", "npm", "run", "dev"]
+]
 ```
 
 Every key is optional. `launch`, `suites` and `killPattern` are empty by default

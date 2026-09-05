@@ -34,7 +34,9 @@ DEFAULTS = {
     "worktrees": "",       # where build agents get their trees; "" -> <repoDir>-worktrees
     "tracker": "auto",     # roadmap markdown, relative to repoDir; "auto" -> first found
     "gameHost": "",        # a host to ping for the stats view (optional)
-    "launch": [],          # argv for the Launch button, e.g. ["npm","run","dev"]
+    "launch": [],          # Launch button: argv (["npm","run","dev"]) or, to run
+                           # steps in order, [["build","npm","run","build"],
+                           #                  ["dev","npm","run","dev"]]
     "suites": [],          # [["name","cmd","arg"...], ...] for the Run tests button
     "killPattern": "",     # process-name substring for the Kill button, e.g. "godot"
 }
@@ -544,6 +546,19 @@ def run_steps(t, steps, cwd):
             t["running"], t["exit"] = False, code
 
 
+def as_steps(spec):
+    """Accept either a bare argv or a list of [label, cmd, ...] steps."""
+    if not spec:
+        return []
+    if all(isinstance(x, str) for x in spec):
+        return [(spec[0], list(spec))]
+    return [(str(s[0]), [str(a) for a in s[1:]]) for s in spec if len(s) > 1]
+
+
+def missing_binary(steps):
+    return next((argv[0] for _, argv in steps if not shutil.which(argv[0])), None)
+
+
 def start_task(name, steps, cwd):
     t = new_task(name, cwd)
     threading.Thread(target=run_steps, args=(t, steps, cwd), daemon=True).start()
@@ -1021,20 +1036,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     t["running"], t["exit"] = False, 0
                 return self._json({"id": t["id"]})
             if kind == "launch":
-                argv = list(CONFIG["launch"])
-                if not argv:
+                steps = as_steps(CONFIG["launch"])
+                if not steps:
                     return self._json({"error": "no launch command configured"}, 400)
-                if not shutil.which(argv[0]):
-                    return self._json({"error": f"{argv[0]} not on PATH"}, 400)
-                t = start_task(f"launch · {where}", [(argv[0], argv)], cwd)
+                missing = missing_binary(steps)
+                if missing:
+                    return self._json({"error": f"{missing} not on PATH"}, 400)
+                t = start_task(f"launch · {where}", steps, cwd)
                 return self._json({"id": t["id"]})
             if kind == "tests":
-                suites = [(s[0], list(s[1:])) for s in CONFIG["suites"]]
-                if not suites:
+                steps = as_steps(CONFIG["suites"])
+                if not steps:
                     return self._json({"error": "no suites configured"}, 400)
-                if not shutil.which(suites[0][1][0]):
-                    return self._json({"error": f"{suites[0][1][0]} not on PATH"}, 400)
-                t = start_task(f"{len(suites)} suites · {where}", suites, cwd)
+                missing = missing_binary(steps)
+                if missing:
+                    return self._json({"error": f"{missing} not on PATH"}, 400)
+                t = start_task(f"{len(steps)} step{'s' if len(steps) > 1 else ''} · {where}",
+                               steps, cwd)
                 return self._json({"id": t["id"]})
             return self._json({"error": f"unknown task {kind}"}, 400)
 
