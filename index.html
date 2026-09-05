@@ -135,6 +135,25 @@ tailwind.config = {
   .row .dispatch{opacity:.35;transition:opacity .15s}
   .row:hover .dispatch,.row .dispatch:focus-visible{opacity:1}
   .msg{white-space:pre-wrap;word-break:break-word}
+  .msg.md{white-space:normal}
+  .msg.md > :first-child{margin-top:0}
+  .msg.md > :last-child{margin-bottom:0}
+  .msg.md p{margin:.5rem 0}
+  .msg.md h3,.msg.md h4,.msg.md h5,.msg.md h6{margin:.75rem 0 .35rem;font-weight:600;line-height:1.3}
+  .msg.md h3{font-size:14px} .msg.md h4{font-size:13px} .msg.md h5,.msg.md h6{font-size:12px}
+  .msg.md ul,.msg.md ol{margin:.4rem 0;padding-left:1.25rem}
+  .msg.md ul{list-style:disc} .msg.md ol{list-style:decimal}
+  .msg.md li{margin:.2rem 0}
+  .msg.md blockquote{margin:.4rem 0;padding-left:.6rem;border-left:2px solid hsl(var(--border));
+    color:hsl(var(--muted-foreground))}
+  .msg.md hr{margin:.7rem 0;border:0;border-top:1px solid hsl(var(--border))}
+  .msg.md strong{font-weight:600}
+  .md-code-inline{font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;
+    background:hsl(var(--muted));border-radius:4px;padding:.05rem .3rem;word-break:break-word}
+  .md-code{margin:.5rem 0;padding:.55rem .7rem;border-radius:calc(var(--radius) - 2px);
+    background:hsl(var(--muted));overflow-x:auto}
+  .md-code code{font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;
+    line-height:1.5;white-space:pre;display:block}
   #panel{position:relative}
   .thumb{position:relative;display:flex;align-items:center;gap:.375rem;max-width:11rem;
     border:1px solid hsl(var(--border));border-radius:calc(var(--radius) - 4px);
@@ -884,10 +903,58 @@ window.dropAttachment = async file => {
   renderPanel();
 };
 
+/* Agents answer in markdown. Escape first, then format what they actually use:
+   fenced and inline code, bold, emphasis, headings, lists, quotes, links. */
+function md(text){
+  const blocks = [];
+  let src = String(text ?? "").replace(/\r\n/g, "\n");
+  src = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    blocks.push(`<pre class="md-code"><code>${esc(code.replace(/\n+$/, ""))}</code></pre>`);
+    return `@@BLOCK${blocks.length - 1}@@`;
+  });
+  src = esc(src);
+  src = src.replace(/`([^`\n]+)`/g, (_, c) => `<code class="md-code-inline">${c}</code>`);
+  src = src.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  // single-asterisk emphasis only: underscores here are identifiers, not markup
+  src = src.replace(/(^|[\s([])\*([^*\n]+)\*(?=[\s).,;:!?\]]|$)/g, "$1<em>$2</em>");
+  src = src.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+                    '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  src = src.replace(/(^|[\s(])(https?:\/\/[^\s<)"]+)/g,
+                    '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+
+  const out = [];
+  let list = null, para = [];
+  const flushPara = () => { if (para.length) { out.push(`<p>${para.join("<br>")}</p>`); para = []; } };
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  const openList = tag => { if (list !== tag) { closeList(); out.push(`<${tag}>`); list = tag; } };
+
+  for (const raw of src.split("\n")) {
+    const line = raw.trim();
+    if (!line) { flushPara(); closeList(); continue; }
+    if (/^@@BLOCK\d+@@$/.test(line)) { flushPara(); closeList(); out.push(line); continue; }
+    if (/^(-{3,}|\*{3,})$/.test(line)) { flushPara(); closeList(); out.push("<hr>"); continue; }
+    const h = line.match(/^(#{1,6})\s+(.+)$/);
+    if (h) {
+      const lvl = Math.min(h[1].length + 2, 6);
+      flushPara(); closeList(); out.push(`<h${lvl}>${h[2]}</h${lvl}>`); continue;
+    }
+    const ol = line.match(/^\d+[.)]\s+(.+)$/);
+    const ul = line.match(/^[-*+]\s+(.+)$/);
+    if (ol || ul) { flushPara(); openList(ol ? "ol" : "ul"); out.push(`<li>${(ol || ul)[1]}</li>`); continue; }
+    if (line.startsWith("&gt; ")) { flushPara(); closeList(); out.push(`<blockquote>${line.slice(5)}</blockquote>`); continue; }
+    if (list) { out[out.length - 1] = out[out.length - 1].replace(/<\/li>$/, " " + line + "</li>"); continue; }
+    para.push(line);
+  }
+  flushPara(); closeList();
+  return out.join("").replace(/@@BLOCK(\d+)@@/g, (_, i) => blocks[i]);
+}
+
 function bubble(m){
   const mine = m.role === "user";
   const color = m.role === "error" ? "var(--critical)" : m.role === "system" ? "hsl(var(--muted-foreground))" : "";
-  const linked = esc(m.text).replace(/https?:\/\/\S+/g,
+  // agent output is markdown; our own text and machine notes stay literal
+  const rich = !mine && m.role !== "error" && m.role !== "system";
+  const body = rich ? md(m.text) : esc(m.text).replace(/https?:\/\/\S+/g,
     u => `<a class="underline" href="${u}" target="_blank" rel="noopener">${u}</a>`);
   const att = (m.attachments || []).map(a => a.image
     ? `<img class="att-img" src="/api/uploads/${encodeURIComponent(a.file)}" alt="${esc(a.name)}"
@@ -896,8 +963,8 @@ function bubble(m){
     : `<a href="/api/uploads/${encodeURIComponent(a.file)}" target="_blank" rel="noopener">${esc(a.name)}</a>`).join("");
   return `<div class="mb-3 ${mine ? "text-right" : ""}">
     <div class="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">${mine ? "you" : esc(m.role)}</div>
-    <div class="msg inline-block max-w-[94%] rounded-lg border border-border px-2.5 py-1.5 text-left text-[13px]
-      ${mine ? "bg-accent" : ""}" ${color?`style="color:${color}"`:""}>${linked}
+    <div class="msg${rich ? " md" : ""} inline-block max-w-[94%] rounded-lg border border-border px-2.5 py-1.5 text-left text-[13px]
+      ${mine ? "bg-accent" : ""}" ${color?`style="color:${color}"`:""}>${body}
       ${att ? `<div class="msg-att">${att}</div>` : ""}</div></div>`;
 }
 
