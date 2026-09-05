@@ -75,8 +75,11 @@ tailwind.config = {
   .atab:hover{background:hsl(var(--accent))}
   .atab[data-active=true]{background:hsl(var(--accent));color:hsl(var(--accent-foreground));
     border-color:hsl(var(--border))}
+  .atab .lbl,.atab .x{display:inline-flex;align-items:center;gap:.375rem;background:none;
+    border:0;color:inherit;font:inherit;cursor:pointer;padding:0}
   .atab .x{opacity:.5;border-radius:4px;padding:0 3px;line-height:1}
   .atab .x:hover{opacity:1;background:hsl(var(--background))}
+  .atab :focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px;border-radius:4px}
   .btn{display:inline-flex;align-items:center;justify-content:center;gap:.375rem;white-space:nowrap;
     border-radius:calc(var(--radius) - 2px);font-size:13px;font-weight:500;height:2rem;padding:0 .625rem;
     transition:background-color .15s,color .15s,border-color .15s,opacity .15s;cursor:pointer;
@@ -103,7 +106,7 @@ tailwind.config = {
   svg.i{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;
         stroke-linecap:round;stroke-linejoin:round}
   .row:hover{background:hsl(var(--accent)/.45)}
-  .row .dispatch{opacity:0}
+  .row .dispatch{opacity:.35;transition:opacity .15s}
   .row:hover .dispatch,.row .dispatch:focus-visible{opacity:1}
   .msg{white-space:pre-wrap;word-break:break-word}
   .dots::after{content:"";animation:d 1.2s steps(4,end) infinite}
@@ -171,6 +174,17 @@ tailwind.config = {
       <div class="mt-2 flex flex-wrap items-center gap-2">
         <button id="newIssue" class="btn btn-sm">
           <svg class="i" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>New issue</button>
+        <span class="text-xs text-muted-foreground">dispatch with</span>
+        <div class="tg" id="providerGroup" title="Which CLI runs the agent">
+          <button class="btn btn-sm px-2" data-provider="claude" data-active="true">Claude</button>
+          <button class="btn btn-sm px-2" data-provider="codex">Codex</button>
+        </div>
+        <div class="tg" id="modeGroup"
+             title="Plan: read-only, it reports back. Build: its own worktree and branch, ending in a draft PR.">
+          <button class="btn btn-sm px-2" data-mode="plan" data-active="true">Plan</button>
+          <button class="btn btn-sm px-2" data-mode="build">Build</button>
+        </div>
+        <input id="model" class="inp btn-sm w-24" placeholder="model" title="Optional model override">
         <span class="mx-1 h-4 w-px bg-border"></span>
         <button id="launch" class="btn btn-sm" hidden title="Run the configured launch command in the main checkout">
           <svg class="i" viewBox="0 0 24 24"><path d="m6 3 14 9-14 9Z"/></svg>Launch</button>
@@ -210,24 +224,7 @@ tailwind.config = {
         <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
 
-    <div class="flex flex-wrap items-center gap-1.5 border-b border-border px-2.5 py-1.5">
-      <div class="tg" id="pviews">
-        <button class="btn btn-sm px-2" data-pview="chat" data-active="true">Chat</button>
-        <button class="btn btn-sm px-2" data-pview="agents">Agents</button>
-        <button class="btn btn-sm px-2" data-pview="console">Console</button>
-      </div>
-      <div class="tg" id="providerGroup" title="Which CLI runs the agent">
-        <button class="btn btn-sm px-2" data-provider="claude" data-active="true">Claude</button>
-        <button class="btn btn-sm px-2" data-provider="codex">Codex</button>
-      </div>
-      <div class="tg" id="modeGroup" title="Plan reads only; Build gets a worktree, branch and draft PR">
-        <button class="btn btn-sm px-2" data-mode="plan" data-active="true">Plan</button>
-        <button class="btn btn-sm px-2" data-mode="build">Build</button>
-      </div>
-      <input id="model" class="inp btn-sm w-20 min-w-0 flex-1" placeholder="model">
-    </div>
-
-    <div id="atabs" class="flex items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5" hidden></div>
+    <div id="atabs" class="flex items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5"></div>
     <div id="stages" class="border-b border-border px-3 py-2" hidden></div>
     <div id="agentbar" class="flex flex-wrap items-center gap-1.5 border-b border-border px-2.5 py-1.5 text-xs" hidden></div>
 
@@ -253,6 +250,18 @@ const app = $("#app"), panel = $("#panel");
 const esc = t => String(t ?? "").replace(/[<&>"]/g, c => ({"<":"&lt;","&":"&amp;",">":"&gt;",'"':"&quot;"}[c]));
 const api = (u, o) => fetch(u, o).then(r => r.json());
 const post = (u, b) => api(u, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(b||{})});
+/* GitHub label colors are authored for a light background; lift dark ones so
+   they stay readable here, and never trust the string in an attribute. */
+function labelColor(hex){
+  const h = /^[0-9a-fA-F]{6}$/.test(hex || "") ? hex : "8b949e";
+  let [r, g, b] = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
+  if (l >= 0.45) return "#" + h;
+  const k = (0.55 - l) / (1 - l);                 // mix toward white
+  const up = v => Math.round((v + (1 - v) * k) * 255).toString(16).padStart(2, "0");
+  return "#" + up(r) + up(g) + up(b);
+}
+
 const BOT = '<svg class="i" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>';
 
 /* ---------------- persisted UI state ---------------- */
@@ -263,6 +272,8 @@ let ui = {...DEF};
 try { ui = {...DEF, ...JSON.parse(localStorage.getItem("agentDashboardUI") || "{}")}; } catch(e){}
 
 function applyUI(){
+  const composer = document.querySelector("#composer");
+  if (composer) composer.hidden = ui.pview !== "chat";
   app.dataset.dock = ui.dock; app.dataset.pinned = ui.pinned; app.dataset.hidden = ui.hidden;
   app.dataset.main = ui.main;
   panel.style.setProperty("--w", ui.w); panel.style.setProperty("--h", ui.h);
@@ -271,7 +282,6 @@ function applyUI(){
   $$("#modeGroup .btn").forEach(b => b.dataset.active = b.dataset.mode === ui.mode);
   $$("#stateGroup .btn").forEach(b => b.dataset.active = b.dataset.state === ui.issueState);
   $$("#tabs .btn").forEach(b => b.dataset.active = b.dataset.tab === ui.tab);
-  $$("#pviews .btn").forEach(b => b.dataset.active = b.dataset.pview === ui.pview);
   $$("[data-view]").forEach(v => v.hidden = v.dataset.view !== ui.tab);
   $("#pin").setAttribute("aria-pressed", ui.pinned === "1");
   $("#expand").hidden = ui.main === "1";
@@ -282,14 +292,16 @@ function applyUI(){
 $$("#dockGroup .btn").forEach(b => b.onclick = () => { ui.dock = b.dataset.dock; applyUI(); });
 $$("#providerGroup .btn").forEach(b => b.onclick = () => { ui.provider = b.dataset.provider; applyUI(); });
 $$("#modeGroup .btn").forEach(b => b.onclick = () => { ui.mode = b.dataset.mode; applyUI(); });
-$("#model").oninput = e => { ui.model = e.target.value.trim(); applyUI(); };
+$("#model").oninput = e => { ui.model = e.target.value; applyUI(); };
+const model = () => (ui.model || "").trim();
 $("#pin").onclick = () => { ui.pinned = ui.pinned === "1" ? "0" : "1"; applyUI(); };
 $("#collapse").onclick = () => { ui.main = "0"; ui.hidden = "0"; applyUI(); };
 $("#expand").onclick = () => { ui.main = "1"; applyUI(); };
 $("#close").onclick = () => { ui.hidden = "1"; applyUI(); };
 $("#show").onclick = () => { ui.hidden = "0"; applyUI(); };
 $$("#tabs .btn").forEach(b => b.onclick = () => { ui.tab = b.dataset.tab; applyUI(); loadTab(); });
-$$("#pviews .btn").forEach(b => b.onclick = () => { ui.pview = b.dataset.pview; applyUI(); renderPanel(); });
+const isChat = () => ui.pview === "chat";
+window.showView = v => { ui.pview = v; applyUI(); renderPanel(); };
 
 $("#grip").addEventListener("pointerdown", e => {
   if (ui.pinned !== "1") return;
@@ -360,7 +372,8 @@ function render(){
       <span class="min-w-0 flex-1">
         <a class="hover:underline" href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a>
         ${statusChip(i)}
-        ${i.labels.map(l => `<span class="badge ml-1" style="border-color:#${l.color}80;color:#${l.color}">${esc(l.name)}</span>`).join("")}
+        ${i.labels.map(l => { const c = labelColor(l.color);
+          return `<span class="badge ml-1" style="border-color:${c}80;color:${c}">${esc(l.name)}</span>`; }).join("")}
         <span class="ml-1.5 text-xs text-muted-foreground">by ${esc(i.author?.login || "?")}</span>
       </span>
       <span class="shrink-0 text-xs text-muted-foreground">${i.comments?.length ? i.comments.length + " ✦ " : ""}${ago(i.updatedAt)}</span>
@@ -379,20 +392,31 @@ function skeleton(){
 
 /* Issues are cached per state: a tab switch renders instantly from cache and
    revalidates in the background. A visible Issues tab refreshes every 60s. */
-const issueCache = {};
-let issueTimer = null, lastFetch = 0;
+const issueCache = {}, fetchedAt = {};
+let issueTimer = null;
+
+function listError(msg){
+  $("#count").textContent = "";
+  $("#list").innerHTML = `<li class="py-10 text-center" style="color:var(--critical)">
+    ${esc(msg)}<div class="mt-2"><button class="btn btn-sm" onclick="loadIssues({force:true})">Retry</button></div></li>`;
+}
 
 async function loadIssues({force = false} = {}){
   const state = ui.issueState;
   const cached = issueCache[state];
-  if (cached) { data = cached; render(); }
-  else skeleton();
-  if (!force && cached && Date.now() - lastFetch < 15000) return;
-  const fresh = await api("/api/issues?state=" + state);
-  lastFetch = Date.now();
-  issueCache[state] = fresh;
+  if (cached) { data = cached; render(); } else skeleton();
+  if (!force && cached && Date.now() - (fetchedAt[state] || 0) < 15000) return;
+  let fresh;
+  try { fresh = await api("/api/issues?state=" + state); }
+  catch (e) { if (!cached) listError("Could not reach the dashboard server."); return; }
+  if (!Array.isArray(fresh)) {                 // {"error": ...} from gh — never cache it
+    if (!cached) listError(fresh?.error || "GitHub request failed.");
+    return;
+  }
+  issueCache[state] = fresh; fetchedAt[state] = Date.now();
   if (ui.issueState === state) { data = fresh; render(); }
 }
+window.loadIssues = loadIssues;
 
 function issueAutoRefresh(on){
   clearInterval(issueTimer); issueTimer = null;
@@ -401,10 +425,11 @@ function issueAutoRefresh(on){
   }, 60000);
 }
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && ui.tab === "issues" && Date.now() - lastFetch > 60000) loadIssues({force: true});
+  if (!document.hidden && ui.tab === "issues" &&
+      Date.now() - (fetchedAt[ui.issueState] || 0) > 60000) loadIssues({force: true});
 });
 $("#q").oninput = render;
-$("#refresh").onclick = () => { lastFetch = 0; loadTab(true); };
+$("#refresh").onclick = () => { fetchedAt[ui.issueState] = 0; loadTab(true); };
 $$("#stateGroup .btn").forEach(b => b.onclick = () => { ui.issueState = b.dataset.state; applyUI(); loadIssues(); });
 
 /* ---------------- charts (dataviz: 2px lines, one axis, legend + hover) ------- */
@@ -442,6 +467,7 @@ ${series.map(s => `${s.name}: ${s.values[i] ?? "–"}`).join("\n")}</title></rec
 /* ---------------- roadmap ---------------- */
 const RSTATUS = {Resolved:"var(--good)", Verification:"var(--warning)",
                  Open:"var(--critical)", Deferred:"hsl(var(--muted-foreground))"};
+const rcolor = st => RSTATUS[st] || "hsl(var(--muted-foreground))";
 
 async function loadRoadmap(){
   const r = await api("/api/roadmap");
@@ -476,8 +502,8 @@ async function loadRoadmap(){
           <div class="rounded-md border border-border px-2.5 py-2">
             <div class="flex flex-wrap items-center gap-1.5">
               <span class="font-mono text-xs">${esc(it.id)}</span>
-              <span class="badge" style="color:${RSTATUS[it.status]};border-color:${RSTATUS[it.status]}66">
-                <span class="dot" style="background:${RSTATUS[it.status]}"></span>${esc(it.status)}</span>
+              <span class="badge" style="color:${rcolor(it.status)};border-color:${rcolor(it.status)}66">
+                <span class="dot" style="background:${rcolor(it.status)}"></span>${esc(it.status)}</span>
               <span class="badge text-muted-foreground">${esc(it.severity)}</span>
               ${it.issues.map(n => `<a class="badge hover:underline" target="_blank" rel="noopener"
                  href="https://github.com/${(window.ME?.repo)||""}/issues/${n}">#${n}</a>
@@ -563,48 +589,61 @@ function loadTab(force){
 }
 
 /* ---------------- agents + tasks ---------------- */
-let taskId = null, composing = null, poll = null, agentsCache = [];
+let taskId = null, composing = null, poll = null, agentsCache = [], tabsRev = 0;
 const activeId = () => ui.active;
 
 function setPoll(on){
+  if (on && poll) return;
   clearInterval(poll); poll = null;
   if (on) poll = setInterval(renderPanel, 1500);
 }
 
+/* The panel polls exactly while something can still change: any agent working,
+   or an open console task still running. Every render path ends here. */
+function autoPoll(taskRunning){
+  setPoll(agentsCache.some(a => a.busy) || !!taskRunning);
+}
+
 /* one tab per open agent chat; closing a tab keeps the agent running */
 function addTab(id, label){
+  tabsRev++;
   if (!ui.tabs.some(t => t.id === id)) ui.tabs.push({id, label: label || id});
   else if (label) ui.tabs.find(t => t.id === id).label = label;
   ui.active = id; applyUI();
 }
 function closeTab(id){
+  tabsRev++;
   ui.tabs = ui.tabs.filter(t => t.id !== id);
   if (ui.active === id) ui.active = ui.tabs.at(-1)?.id || null;
   applyUI(); renderPanel();
 }
 window.closeTab = closeTab;
-window.selectTab = id => { ui.active = id; composing = null; applyUI(); setPoll(true); renderPanel(); };
+window.selectTab = id => { ui.active = id; composing = null; ui.pview = "chat";
+  applyUI(); renderPanel(); };
 
 function renderTabs(){
   const bar = $("#atabs");
-  bar.hidden = ui.pview !== "chat" || !ui.tabs.length;
-  if (bar.hidden) return;
+  const fixed = [["agents", "Agents"], ["console", "Console"]];
+  const working = agentsCache.filter(a => a.busy).length;
   bar.innerHTML = ui.tabs.map(t => {
-    const a = agentsCache.find(x => x.id === t.id);
-    const busy = a?.busy;
-    return `<span class="atab" data-active="${t.id === ui.active}" onclick="selectTab('${t.id}')">
-      <span class="dot" style="background:${busy ? "var(--warning)" : "hsl(var(--muted-foreground))"};
-        ${busy ? "animation:p 1.4s ease-in-out infinite" : ""}"></span>
-      ${esc(t.label)}
-      <span class="x" onclick="event.stopPropagation();closeTab('${t.id}')" title="Close tab">×</span></span>`;
-  }).join("");
+    const busy = agentsCache.find(x => x.id === t.id)?.busy;
+    return `<span class="atab" data-active="${t.id === ui.active}">
+      <button class="lbl" onclick="selectTab('${esc(t.id)}')" title="${esc(t.label)}">
+        <span class="dot" style="background:${busy ? "var(--warning)" : "hsl(var(--muted-foreground))"};
+          ${busy ? "animation:p 1.4s ease-in-out infinite" : ""}"></span>${esc(t.label)}</button>
+      <button class="x" onclick="closeTab('${esc(t.id)}')" title="Close tab"
+        aria-label="Close ${esc(t.label)}">×</button></span>`;
+  }).join("") + `<span class="ml-auto flex shrink-0 items-center gap-1">` +
+  fixed.map(([v, label]) => `<span class="atab" data-active="${ui.pview === v && !isChat()}">
+      <button class="lbl" onclick="showView('${v}')">${label}${
+        v === "agents" && working ? ` <span class="badge" style="color:var(--warning);border-color:var(--warning)66">${working}</span>` : ""}</button></span>`).join("") + `</span>`;
 }
 
 async function dispatch(number){
   ui.hidden = "0"; ui.pview = "chat"; applyUI();
   composing = null;
   $("#pbody").innerHTML = `<div class="text-muted-foreground">Dispatching ${ui.provider} (${ui.mode}) on #${number}<span class="dots"></span></div>`;
-  const a = await post("/api/agents", {number, provider: ui.provider, mode: ui.mode, model: ui.model});
+  const a = await post("/api/agents", {number, provider: ui.provider, mode: ui.mode, model: model()});
   if (a.error) { $("#pbody").innerHTML = `<div style="color:var(--critical)">${esc(a.error)}</div>`; return; }
   addTab(a.id, "#" + number); setPoll(true); renderPanel(); loadIssues({force: true});
 }
@@ -641,10 +680,14 @@ function stageRail(stages){
 }
 
 async function renderPanel(){
+  const rev = tabsRev;
   agentsCache = await api("/api/agents").catch(() => agentsCache);
-  ui.tabs = ui.tabs.filter(t => agentsCache.some(a => a.id === t.id));
-  if (ui.active && !ui.tabs.some(t => t.id === ui.active)) ui.active = ui.tabs.at(-1)?.id || null;
+  if (rev === tabsRev) {          // a tab opened while we were fetching? leave it alone
+    ui.tabs = ui.tabs.filter(t => agentsCache.some(a => a.id === t.id));
+    if (ui.active && !ui.tabs.some(t => t.id === ui.active)) ui.active = ui.tabs.at(-1)?.id || null;
+  }
   renderTabs();
+  autoPoll();
   if (ui.pview === "agents") return renderAgents();
   if (ui.pview === "console") return renderConsole();
   if (composing === "new-issue" && !activeId()) return;
@@ -652,8 +695,13 @@ async function renderPanel(){
     $("#stages").hidden = true; $("#agentbar").hidden = true;
     $("#ptitle").textContent = "Chat";
     $("#pbody").innerHTML = `<div class="grid h-full place-items-center text-center text-muted-foreground">
-      <div><div class="text-2xl">Chat</div>
-      <div class="mt-1 text-xs">Hover an issue and hit ${"the bot icon"} to dispatch an agent.</div></div></div>`;
+      <div class="max-w-[16rem]">
+        <div class="text-2xl text-foreground">Chat</div>
+        <p class="mt-2 text-xs">Pick <b>Claude</b> or <b>Codex</b> and <b>Plan</b> or <b>Build</b> above the
+          issue list, then press the robot button on any issue. Each agent gets its own tab here.</p>
+        <button class="btn btn-sm mt-3" onclick="document.querySelector('#newIssue').click()">
+          Describe a new issue instead</button>
+      </div></div>`;
     return;
   }
   const a = await api("/api/agents/" + activeId());
@@ -676,7 +724,7 @@ async function renderPanel(){
   t.innerHTML = a.messages.map(bubble).join("") +
     (a.busy ? `<div class="text-xs text-muted-foreground">${esc(a.provider)} is working<span class="dots"></span></div>` : "");
   if (bottom) t.scrollTop = t.scrollHeight;
-  if (ui.pview === "chat" && poll && !agentsCache.some(x => x.busy)) setPoll(false);
+  autoPoll();
 }
 
 async function renderAgents(){
@@ -725,7 +773,7 @@ async function renderConsole(){
                   : `<span class="badge" style="color:${t.exit ? "var(--critical)" : "var(--good)"}">exit ${t.exit}</span>`}</div>
     <pre class="console">${esc(t.output)}</pre>`;
   if (bottom) b.scrollTop = b.scrollHeight;
-  if (t.running) setPoll(true);
+  autoPoll(t.running);
 }
 
 window.task = async (kind, agent) => {
@@ -773,7 +821,7 @@ $("#composer").onsubmit = async e => {
   $("#msg").value = ""; $("#msg").style.height = "auto";
   if (composing === "new-issue" && !activeId()) {
     $("#pbody").innerHTML = `<div class="text-muted-foreground">${ui.provider} is drafting the issue<span class="dots"></span></div>`;
-    const a = await post("/api/issues/new", {text, provider: ui.provider, model: ui.model});
+    const a = await post("/api/issues/new", {text, provider: ui.provider, model: model()});
     if (a.error) { $("#pbody").innerHTML = `<div style="color:var(--critical)">${esc(a.error)}</div>`; return; }
     addTab(a.id, "new"); composing = null; $("#msg").placeholder = "Message the agent…";
     setPoll(true); return renderPanel();
@@ -800,6 +848,12 @@ setInterval(async () => {
   if (before !== ui.tabs.length) { applyUI(); renderPanel(); } else renderTabs();
 }, 5000);
 
+addEventListener("keydown", e => {
+  const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName);
+  if (e.key === "/" && !typing && ui.tab === "issues") { e.preventDefault(); $("#q").focus(); }
+  if (e.key === "Escape" && document.activeElement === $("#q")) $("#q").blur();
+});
+
 loadTab();
-renderPanel();
+renderPanel();          // ends in autoPoll(), so a reload during a live turn keeps updating
 </script>

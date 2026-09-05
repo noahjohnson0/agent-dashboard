@@ -14,7 +14,8 @@ issues, and lets you dispatch Claude or Codex agents at them.
 
 macOS, Linux and Windows. Python 3.9+, no third-party packages.
 """
-import http.server, json, os, platform, re, shlex, shutil, signal, subprocess, sys, threading, time, uuid
+import calendar, http.server, json, os, platform, re, shlex, shutil, signal
+import subprocess, sys, threading, time, uuid
 
 WINDOWS = platform.system() == "Windows"
 
@@ -179,8 +180,11 @@ def extract_json(text):
         for i in range(start, len(text)):
             c = text[i]
             if in_str:
-                esc = (c == "\\" and not esc)
-                if c == '"' and not esc:
+                if esc:                      # this char is escaped; consume it
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
                     in_str = False
                 continue
             if c == '"':
@@ -243,7 +247,9 @@ ISSUE_RE = re.compile(r"(?:GitHub #|issues/|#)(\d{1,4})\b")
 
 
 def parse_roadmap():
-    if not os.path.exists(TRACKER):
+    if not CONFIG["tracker"]:
+        return {"error": "No roadmap tracker configured or found in " + REPO_DIR}
+    if not os.path.isfile(TRACKER):
         return {"error": CONFIG["tracker"] + " not found in " + REPO_DIR}
     text = open(TRACKER, encoding="utf-8").read()
     sections, cur, updated, timeline = [], None, None, {}
@@ -298,19 +304,31 @@ def parse_roadmap():
 # ---------------------------------------------------------------- config
 
 
-def save_config(cfg):
+def save_config(updates):
+    """Merge into config.json. Auto-detected values are never written back:
+    freezing them would make the next run in another checkout follow this repo."""
     os.makedirs(STATE_DIR, exist_ok=True)
-    json.dump(cfg, open(CONFIG_FILE, "w"), indent=1)
-    return cfg
+    on_disk = {}
+    try:
+        on_disk = json.load(open(CONFIG_FILE))
+    except Exception:                                          # noqa: BLE001
+        pass
+    on_disk.update(updates)
+    json.dump(on_disk, open(CONFIG_FILE, "w"), indent=1)
+    return on_disk
 
 
 # ---------------------------------------------------------------- stats
 
 
-def run_quiet(argv):
+def run_quiet(argv, timeout=15):
     try:
         return subprocess.run(argv, capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL)
+                              stdin=subprocess.DEVNULL, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        class _T:
+            returncode, stdout, stderr = 1, "", "timed out"
+        return _T()
     except (OSError, ValueError):
         class _R:
             returncode, stdout, stderr = 1, "", ""
@@ -360,9 +378,13 @@ def mem_used_pct():
 def ping_ms(host):
     if not host:
         return None
-    argv = (["ping", "-n", "1", "-w", "1500", host] if WINDOWS
-            else ["ping", "-c", "1", "-W", "1500", host])
-    out = run_quiet(argv).stdout
+    if WINDOWS:
+        argv = ["ping", "-n", "1", "-w", "1500", host]
+    elif platform.system() == "Linux":
+        argv = ["ping", "-c", "1", "-W", "2", host]          # -W is seconds here
+    else:
+        argv = ["ping", "-c", "1", "-W", "1500", host]       # and milliseconds here
+    out = run_quiet(argv, timeout=5).stdout
     m = re.search(r"time[=<]([\d.]+)\s*ms", out)
     return float(m.group(1)) if m else None
 
@@ -376,8 +398,9 @@ def watched_pids():
         out = run_quiet(["tasklist", "/FO", "CSV", "/NH"]).stdout
         return [int(m.group(2)) for m in re.finditer(r'^"([^"]+)","(\d+)"', out, re.M)
                 if pat.lower() in m.group(1).lower()]
-    out = run_quiet(["pgrep", "-fi", pat]).stdout
-    return [int(p) for p in out.split() if p.isdigit()]
+    out = run_quiet(["pgrep", "-i", pat]).stdout        # -i, never -f: matching
+    return [int(p) for p in out.split() if p.isdigit()]  # full command lines would
+                                                         # hit our own agent CLIs
 
 
 def sample():
@@ -441,8 +464,8 @@ def issue_history(weeks=12):
     week = 7 * 86400
     edges = [now - (weeks - i) * week for i in range(weeks + 1)]
 
-    def ts(s):
-        return time.mktime(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")) if s else None
+    def ts(s):     # GitHub stamps are UTC; mktime would read them as local time
+        return calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")) if s else None
 
     created = [ts(i["createdAt"]) for i in issues]
     closed = [ts(i.get("closedAt")) for i in issues if i.get("closedAt")]
@@ -453,7 +476,7 @@ def issue_history(weeks=12):
         closed_s.append(sum(1 for c in closed if lo <= c < hi))
         backlog_s.append(sum(1 for j, c in enumerate(created) if c < hi) -
                          sum(1 for c in closed if c < hi))
-        labels.append(time.strftime("%b %-d", time.localtime(lo)))
+        labels.append(time.strftime("%b %d", time.localtime(lo)).replace(" 0", " "))
     data = {"weeks": labels, "opened": opened_s, "closed": closed_s, "backlog": backlog_s}
     _ISSUE_HIST.update(at=time.time(), data=data)
     return data
@@ -488,26 +511,37 @@ def emit(t, line):
 def run_steps(t, steps, cwd):
     """steps: [(label, argv)] run in order; stops at the first failure."""
     code = 0
-    for label, argv in steps:
-        emit(t, f"$ {label}: {' '.join(shlex.quote(a) for a in argv)}")
-        try:
-            p = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                 text=True, bufsize=1)
-        except OSError as e:
-            emit(t, f"[failed to start: {e}]")
-            code = 127
-            break
-        t["proc"] = p
-        for line in p.stdout:
-            emit(t, line)
-        code = p.wait()
-        t["proc"] = None
-        emit(t, f"[{label} exited {code}]")
-        if code != 0:
-            break
-    with T_LOCK:
-        t["running"], t["exit"] = False, code
+    try:
+        for label, argv in steps:
+            emit(t, f"$ {label}: {' '.join(shlex.quote(a) for a in argv)}")
+            try:
+                p = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                     text=True, errors="replace", bufsize=1,
+                                     **CHILD_GROUP)
+            except OSError as e:
+                emit(t, f"[failed to start: {e}]")
+                code = 127
+                break
+            with T_LOCK:
+                t["proc"] = p
+            try:
+                with p.stdout:
+                    for line in p.stdout:
+                        emit(t, line)
+                code = p.wait()
+            finally:
+                with T_LOCK:
+                    t["proc"] = None
+            emit(t, f"[{label} exited {code}]")
+            if code != 0:
+                break
+    except Exception as e:                                     # noqa: BLE001
+        emit(t, f"[task failed: {e}]")
+        code = code or 1
+    finally:
+        with T_LOCK:
+            t["running"], t["exit"] = False, code
 
 
 def start_task(name, steps, cwd):
@@ -533,6 +567,27 @@ def kill_watched():
     return killed
 
 # ---------------------------------------------------------------- agents
+
+CHILD_GROUP = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS
+               else {"start_new_session": True})
+
+
+def end_process(p):
+    """Terminate a child and everything it started."""
+    if not p or p.poll() is not None:
+        return False
+    try:
+        if WINDOWS:
+            run_quiet(["taskkill", "/PID", str(p.pid), "/T", "/F"], timeout=10)
+        else:
+            os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+    except (OSError, ValueError):
+        try:
+            p.terminate()
+        except OSError:
+            return False
+    return True
+
 
 AGENTS, LOCK = {}, threading.Lock()
 
@@ -618,8 +673,11 @@ def stages_for(agent):
 
 
 def spawn(agent, cmd, cwd):
+    if agent.get("dismissed"):
+        raise RuntimeError("agent was dismissed")
     p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         stdin=subprocess.DEVNULL, text=True)
+                         stdin=subprocess.DEVNULL, text=True, errors="replace",
+                         **CHILD_GROUP)
     agent["proc"] = p
     try:
         out, err = p.communicate(timeout=TURN_TIMEOUT)
@@ -739,10 +797,9 @@ def enqueue(agent, text, show_user=True):
 
 
 def stop_agent(agent):
-    agent["stopping"] = True
-    p = agent.get("proc")
-    if p and p.poll() is None:
-        p.terminate()
+    """Kill the running turn (and its children). Only then call it a stop."""
+    if end_process(agent.get("proc")):
+        agent["stopping"] = True
         return True
     return False
 
@@ -769,6 +826,19 @@ def public(a):
 # ---------------------------------------------------------------- http
 
 
+def guarded(fn):
+    """A handler that raises must still answer, or the client hangs on keep-alive."""
+    def wrapper(self):
+        try:
+            fn(self)
+        except Exception as e:                                 # noqa: BLE001
+            try:
+                self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+            except Exception:                                  # noqa: BLE001
+                pass
+    return wrapper
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -793,6 +863,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self.path.split("?")[0].split("/")[i]
 
     # ---- GET
+    @guarded
     def do_GET(self):
         path, _, query = self.path.partition("?")
         q = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
@@ -805,7 +876,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/roadmap":
             self._json(parse_roadmap())
         elif path == "/api/stats":
-            self._json({"now": sample(), "history": read_stats(int(q.get("n", 240))),
+            try:
+                n = max(1, min(int(q.get("n", 240)), MAX_SAMPLES))
+            except ValueError:
+                n = 240
+            self._json({"now": sample(), "history": read_stats(n),
                         "issues": issue_history(), "server": server_status(),
                         "pids": watched_pids(), "config": CONFIG,
                         "killPattern": CONFIG.get("killPattern", "")})
@@ -856,19 +931,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             t = TASKS.get(self._part(3))
             if not t:
                 return self._json({"error": "no such task"}, 404)
-            self._json({"id": t["id"], "name": t["name"], "where": t["where"],
-                        "running": t["running"], "exit": t["exit"],
-                        "output": "\n".join(t["lines"])})
+            with T_LOCK:
+                payload = {"id": t["id"], "name": t["name"], "where": t["where"],
+                           "running": t["running"], "exit": t["exit"],
+                           "output": "\n".join(t["lines"])}
+            self._json(payload)
         else:
             self._send(404, "text/plain", b"not found")
 
     # ---- POST
+    @guarded
     def do_POST(self):
         path = self.path.split("?")[0]
 
         if path == "/api/config":
-            CONFIG.update({k: v for k, v in self._body().items() if k in DEFAULTS})
-            return self._json(save_config(CONFIG))
+            updates = {k: v for k, v in self._body().items() if k in DEFAULTS}
+            CONFIG.update(updates)
+            save_config(updates)
+            return self._json(CONFIG)
 
         if path == "/api/agents":
             b = self._body()
@@ -942,6 +1022,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json({"id": t["id"]})
             if kind == "launch":
                 argv = list(CONFIG["launch"])
+                if not argv:
+                    return self._json({"error": "no launch command configured"}, 400)
                 if not shutil.which(argv[0]):
                     return self._json({"error": f"{argv[0]} not on PATH"}, 400)
                 t = start_task(f"launch · {where}", [(argv[0], argv)], cwd)
@@ -960,10 +1042,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             t = TASKS.get(self._part(3))
             if not t:
                 return self._json({"error": "no such task"}, 404)
-            p = t.get("proc")
-            if p and p.poll() is None:
-                p.terminate()
-            return self._json({"ok": True})
+            with T_LOCK:
+                p = t.get("proc")
+            return self._json({"ok": end_process(p)})
 
         if path.startswith("/api/agents/"):
             a = AGENTS.get(self._part(3))
@@ -995,11 +1076,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._send(404, "text/plain", b"not found")
 
     # ---- DELETE: dismiss an agent, clear its label (worktree is left on disk)
+    @guarded
     def do_DELETE(self):
         if self.path.startswith("/api/agents/"):
             a = AGENTS.get(self._part(3))
             if not a:
                 return self._json({"error": "no such agent"}, 404)
+            a["dismissed"] = True          # blocks a queued turn from spawning
             stop_agent(a)
             with LOCK:
                 AGENTS.pop(a["id"], None)
