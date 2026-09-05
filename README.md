@@ -37,8 +37,10 @@ visible to everyone on the repo. Dismissing an agent removes it.
 **New issue.** Describe the problem in the panel; an agent reads the repo, writes
 it up properly, and files it with `gh`.
 
-**Screenshots.** Paste, drop, or attach an image in the chat and it is passed to
-the agent's next turn (`Read` for Claude, `-i` for Codex).
+**Attachments.** Drop files anywhere on the panel, paste a screenshot, or use the
+attach button. Images go to the agent as images (`-i` for Codex, `Read` for
+Claude); anything else — a log, a diff, a CSV — is handed over as a path it can
+read. Up to 8 MB per file.
 
 **Roadmap.** Point it at a markdown tracker and it renders a progress meter,
 a timeline, and expandable sections whose rows link to the issues they mention

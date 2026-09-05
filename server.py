@@ -761,17 +761,19 @@ def spawn(agent, cmd, cwd):
     return p.returncode, out, err
 
 
-def take_images(agent):
+def take_attachments(agent):
+    """Hand the pending drops to this turn and clear them."""
     with LOCK:
         imgs, agent["images"] = agent.get("images", []), []
-    return imgs
+        files, agent["files"] = agent.get("files", []), []
+    return imgs, files
 
 
 def run_claude(agent, text):
-    imgs = take_images(agent)
-    if imgs:
-        text += "\n\nAttached screenshot(s) — read each one with the Read tool:\n" + \
-                "\n".join(imgs)
+    imgs, files = take_attachments(agent)
+    if imgs or files:
+        text += "\n\nAttached by the user — read each one with the Read tool:\n" + \
+                "\n".join(imgs + files)
     cmd = ["claude", "-p", text, "--output-format", "json"]
     cmd += (["--permission-mode", "bypassPermissions"] if agent["mode"] == "build"
             else ["--permission-mode", "plan"])
@@ -794,8 +796,11 @@ def run_claude(agent, text):
 
 def run_codex(agent, text):
     base = ["codex", "exec", "--json", "-C", agent["cwd"], "--skip-git-repo-check"]
-    for img in take_images(agent):
+    imgs, files = take_attachments(agent)
+    for img in imgs:                       # codex takes images as real attachments
         base += ["-i", img]
+    if files:                              # anything else goes across as a path to read
+        text += "\n\nAttached by the user — read each one:\n" + "\n".join(files)
     base += (["-s", "workspace-write", "-c", "sandbox_workspace_write.network_access=true"]
              if agent["mode"] == "build" else ["-s", "read-only"])
     if agent["model"]:
@@ -885,7 +890,8 @@ def stop_agent(agent):
 def new_agent(**kw):
     a = {"id": uuid.uuid4().hex[:8], "session": None, "busy": False, "stopping": False,
          "proc": None, "kind": "chat", "mode": "plan", "model": "", "messages": [],
-         "cwd": REPO_DIR, "worktree": None, "branch": None, "pr": None, "images": [],
+         "cwd": REPO_DIR, "worktree": None, "branch": None, "pr": None,
+         "images": [], "files": [],
          "started": int(time.time()), "repo": REPO, **kw}
     with LOCK:
         AGENTS[a["id"]] = a
@@ -900,7 +906,7 @@ def summary(a):
 
 def public(a):
     return {**summary(a), "messages": a["messages"], "stages": stages_for(a),
-            "pendingImages": len(a.get("images", []))}
+            "pendingImages": len(a.get("images", [])) + len(a.get("files", []))}
 
 # ---------------------------------------------------------------- http
 
@@ -1144,19 +1150,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json({"stopped": stop_agent(a)})
             if path.endswith("/attach"):
                 b = self._body()
-                data = (b.get("dataUrl") or "").split(",", 1)
-                if len(data) != 2:
+                head, _, payload = (b.get("dataUrl") or "").partition(",")
+                if not payload:
                     return self._json({"error": "expected a data: URL"}, 400)
-                ext = re.search(r"image/(\w+)", data[0])
-                name = f"{a['id']}-{uuid.uuid4().hex[:6]}.{(ext.group(1) if ext else 'png')}"
+                is_image = head.startswith("data:image/")
+                given = os.path.basename(b.get("name") or "")
+                given = re.sub(r"[^A-Za-z0-9._-]", "_", given)[:60]
+                if not given:
+                    ext = re.search(r"data:image/(\w+)", head)
+                    given = f"paste.{ext.group(1) if ext else 'png'}"
+                name = f"{a['id']}-{uuid.uuid4().hex[:6]}-{given}"
                 os.makedirs(os.path.join(STATE_DIR, "uploads"), exist_ok=True)
                 dest = os.path.join(STATE_DIR, "uploads", name)
                 import base64
-                open(dest, "wb").write(base64.b64decode(data[1]))
+                try:
+                    open(dest, "wb").write(base64.b64decode(payload))
+                except Exception:                              # noqa: BLE001
+                    return self._json({"error": "could not decode that file"}, 400)
                 with LOCK:
-                    a.setdefault("images", []).append(dest)
+                    a.setdefault("images" if is_image else "files", []).append(dest)
+                    pending = len(a.get("images", [])) + len(a.get("files", []))
                 save_agent(a)
-                return self._json({"path": dest, "pending": len(a["images"])})
+                return self._json({"path": dest, "image": is_image, "pending": pending})
         self._send(404, "text/plain", b"not found")
 
     # ---- DELETE: dismiss an agent, clear its label (worktree is left on disk)

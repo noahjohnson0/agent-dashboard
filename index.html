@@ -116,10 +116,30 @@ tailwind.config = {
   .card{border:1px solid hsl(var(--border));border-radius:var(--radius);background:hsl(var(--card))}
   svg.i{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;
         stroke-linecap:round;stroke-linejoin:round}
+  /* One grid of columns down the list: the author, status and labels sit in the
+     same place on every row instead of trailing whatever the title left behind. */
+  .col-num{flex:0 0 2.5rem}
+  .col-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit}
+  .col-status{flex:0 0 7.5rem;display:flex;justify-content:flex-start;overflow:hidden}
+  .col-labels{flex:0 0 7.5rem;display:flex;gap:.25rem;justify-content:flex-start;overflow:hidden}
+  .col-comments{flex:0 0 2.25rem;display:flex;align-items:center;gap:.15rem}
+  .col-author{flex:0 0 5.5rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .col-time{flex:0 0 4.75rem;text-align:right;white-space:nowrap}
+  .col-act{flex:0 0 1.75rem}
+  #listHead{position:sticky;top:49px;z-index:5;background:hsl(var(--background));
+    border-bottom:1px solid hsl(var(--border))}
+  /* narrow window: drop the columns that repeat themselves before the title suffers */
+  @media (max-width:1000px){.col-labels{display:none}}
+  @media (max-width:820px){.col-status{flex-basis:5.5rem}.col-author{flex-basis:4.5rem}}
   .row:hover{background:hsl(var(--accent)/.45)}
   .row .dispatch{opacity:.35;transition:opacity .15s}
   .row:hover .dispatch,.row .dispatch:focus-visible{opacity:1}
   .msg{white-space:pre-wrap;word-break:break-word}
+  #panel{position:relative}
+  #panel.dropping::after{content:"Drop files for this agent";position:absolute;inset:8px;z-index:40;
+    display:grid;place-items:center;pointer-events:none;border:2px dashed hsl(var(--ring));
+    border-radius:var(--radius);background:hsl(var(--background)/.85);
+    color:hsl(var(--foreground));font-size:13px;font-weight:500}
   .dots::after{content:"";animation:d 1.2s steps(4,end) infinite}
   @keyframes rowin{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
   @keyframes rowtouch{0%{background:hsl(var(--accent))}100%{background:transparent}}
@@ -181,7 +201,7 @@ tailwind.config = {
     </div>
 
     <!-- issues -->
-    <section data-view="issues" class="mx-auto max-w-4xl p-5">
+    <section data-view="issues" class="mx-auto max-w-6xl p-5">
       <div class="flex flex-wrap items-center gap-2">
         <input id="q" class="inp min-w-[150px] flex-1" placeholder="Filter issues…">
         <div class="tg" id="stateGroup">
@@ -217,7 +237,18 @@ tailwind.config = {
           <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Kill</button>
         <span id="count" class="ml-auto text-xs text-muted-foreground"></span>
       </div>
-      <ul id="list" class="mt-3"></ul>
+      <div id="listHead" class="flex items-center gap-2 px-2 pb-1.5 pt-3 text-[10px]
+           font-semibold uppercase tracking-wider text-muted-foreground">
+        <span class="col-num">#</span>
+        <span class="col-title">Issue</span>
+        <span class="col-status">Status</span>
+        <span class="col-labels">Labels</span>
+        <span class="col-comments" title="Comments"><svg class="i h-3 w-3" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <span class="col-author">Author</span>
+        <span class="col-time">Updated</span>
+        <span class="col-act"></span>
+      </div>
+      <ul id="list"></ul>
     </section>
 
     <!-- roadmap -->
@@ -254,9 +285,9 @@ tailwind.config = {
     <div id="pbody" class="flex-1 overflow-auto p-3"></div>
 
     <form id="composer" class="flex items-end gap-1.5 border-t border-border p-2">
-      <button id="attach" type="button" class="btn btn-icon" title="Attach a screenshot (or just paste one)">
+      <button id="attach" type="button" class="btn btn-icon" title="Attach files — or paste a screenshot, or drop files on the panel">
         <svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4.6-4.6a2 2 0 0 0-2.8 0L3 21"/></svg></button>
-      <input id="file" type="file" accept="image/*" multiple hidden>
+      <input id="file" type="file" multiple hidden>
       <textarea id="msg" rows="1" class="inp flex-1 resize-none py-1.5"
         style="min-height:2rem;max-height:9rem" placeholder="Message the agent…"></textarea>
       <button id="send" class="btn btn-icon btn-primary" type="submit" title="Send">
@@ -275,6 +306,22 @@ const api = (u, o) => fetch(u, o).then(r => r.json());
 const post = (u, b) => api(u, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(b||{})});
 /* GitHub label colors are authored for a light background; lift dark ones so
    they stay readable here, and never trust the string in an attribute. */
+const clip = (t, n) => (t || "").length > n ? (t || "").slice(0, n - 1) + "…" : (t || "");
+
+/* Labels live in a fixed-width column, so show what fits and count the rest. */
+function labelChips(labels, room = 2){
+  if (!labels?.length) return "";
+  const shown = labels.slice(0, room).map(l => {
+    const c = labelColor(l.color);
+    return `<span class="badge" style="border-color:${c}80;color:${c}"
+      title="${esc(l.name)}">${esc(clip(l.name, 12))}</span>`;
+  }).join("");
+  const rest = labels.length - room;
+  return shown + (rest > 0
+    ? `<span class="badge text-muted-foreground" title="${esc(labels.slice(room).map(l => l.name).join(", "))}">+${rest}</span>`
+    : "");
+}
+
 function labelColor(hex){
   const h = /^[0-9a-fA-F]{6}$/.test(hex || "") ? hex : "8b949e";
   let [r, g, b] = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
@@ -284,6 +331,8 @@ function labelColor(hex){
   const up = v => Math.round((v + (1 - v) * k) * 255).toString(16).padStart(2, "0");
   return "#" + up(r) + up(g) + up(b);
 }
+
+const CHAT_ICON = '<svg class="i inline-block h-3 w-3 -mt-px" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> ';
 
 const BOT = '<svg class="i" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>';
 
@@ -399,8 +448,8 @@ function statusChip(i){
   if (i.status === "in review" && i.prs.length)
     text = (i.prs[0].draft ? "draft PR #" : "PR #") + i.prs[0].number;
   if (!text) return "";
-  return `<span class="badge" style="color:${color};border-color:${color}66">
-    <span class="dot" style="background:${color}"></span>${esc(text)}</span>`;
+  return `<span class="badge" style="color:${color};border-color:${color}66" title="${esc(text)}">
+    <span class="dot" style="background:${color}"></span>${esc(clip(text, 18))}</span>`;
 }
 
 let listSig = "", rowSigs = {};
@@ -422,17 +471,20 @@ function render(mode = "cascade"){
   $("#count").textContent = rows.length + (rows.length === 1 ? " issue" : " issues");
   $("#list").dataset.anim = mode;
   $("#list").innerHTML = rows.length ? rows.map((i, idx) => `
-    <li class="row flex items-baseline gap-3 rounded-md border-t border-border px-2 py-2.5${changed[i.number] ? " changed" : ""}"
+    <li class="row flex items-center gap-2 rounded-md border-t border-border px-2 py-2.5${changed[i.number] ? " changed" : ""}"
         style="animation-delay:${mode === "cascade" ? Math.min(idx * 28, 700) : 0}ms">
-      <span class="w-11 shrink-0 font-mono text-xs text-muted-foreground">#${i.number}</span>
-      <span class="min-w-0 flex-1">
-        <a class="hover:underline" href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a>
-        ${statusChip(i)}
-        ${i.labels.map(l => { const c = labelColor(l.color);
-          return `<span class="badge ml-1" style="border-color:${c}80;color:${c}">${esc(l.name)}</span>`; }).join("")}
-        <span class="ml-1.5 text-xs text-muted-foreground">by ${esc(i.author?.login || "?")}</span>
-      </span>
-      <span class="shrink-0 text-xs text-muted-foreground">${i.comments?.length ? i.comments.length + " ✦ " : ""}${ago(i.updatedAt)}</span>
+      <span class="col-num font-mono text-xs text-muted-foreground">#${i.number}</span>
+      <a class="col-title hover:underline" href="${esc(i.url)}" target="_blank" rel="noopener"
+         title="${esc(i.title)}">${esc(i.title)}</a>
+      <span class="col-status">${statusChip(i)}</span>
+      <span class="col-labels">${labelChips(i.labels)}</span>
+      <span class="col-author text-xs text-muted-foreground"
+            title="${esc(i.author?.login || "unknown")}">${esc(clip(i.author?.login || "?", 12))}</span>
+      <span class="col-comments text-xs text-muted-foreground"
+            title="${i.comments?.length || 0} comment${i.comments?.length === 1 ? "" : "s"}">${
+        i.comments?.length ? CHAT_ICON + i.comments.length : ""}</span>
+      <span class="col-time text-xs text-muted-foreground"
+            title="updated ${new Date(i.updatedAt).toLocaleString()}">${ago(i.updatedAt)}</span>
       ${i.agentId ? `<button class="btn btn-sm btn-icon shrink-0" title="Open this agent" onclick="openAgent('${i.agentId}','#${i.number}')">${BOT}</button>`
                   : `<button class="dispatch btn btn-sm btn-icon shrink-0" title="Dispatch a ${ui.mode} agent on #${i.number}" onclick="dispatch(${i.number})">${BOT}</button>`}
     </li>`).join("") : '<li class="py-10 text-center text-muted-foreground">No issues match.</li>';
@@ -857,24 +909,41 @@ $("#tests").onclick = () => task("tests");
 $("#killBtn").onclick = () => task("kill");
 
 /* ---------------- composer (with screenshots) ---------------- */
-async function attachImage(file){
+async function attachFile(file){
   if (!activeId()) { alert("Open or dispatch an agent first."); return; }
+  if (file.size > 8 * 1024 * 1024) { alert(`${file.name} is larger than 8 MB.`); return; }
   const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
-  await post(`/api/agents/${activeId()}/attach`, {dataUrl});
+  const r = await post(`/api/agents/${activeId()}/attach`, {dataUrl, name: file.name});
+  if (r.error) alert(r.error);
   renderPanel();
 }
 $("#attach").onclick = () => $("#file").click();
-$("#file").onchange = e => { [...e.target.files].forEach(attachImage); e.target.value = ""; };
+$("#file").onchange = e => { [...e.target.files].forEach(attachFile); e.target.value = ""; };
 addEventListener("paste", e => {
   const imgs = [...(e.clipboardData?.items || [])].filter(i => i.type.startsWith("image/"));
   if (!imgs.length) return;
   e.preventDefault();
-  imgs.forEach(i => attachImage(i.getAsFile()));
+  imgs.forEach(i => attachFile(i.getAsFile()));
 });
-$("#pbody").addEventListener("dragover", e => e.preventDefault());
-$("#pbody").addEventListener("drop", e => {
-  const f = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith("image/"));
-  if (f.length) { e.preventDefault(); f.forEach(attachImage); }
+/* Drop anywhere on the panel, not just on the transcript, and take any file:
+   images go to the agent as images, everything else as a path it can read. */
+let dragDepth = 0;
+panel.addEventListener("dragenter", e => {
+  if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+  e.preventDefault();
+  if (++dragDepth === 1) panel.classList.add("dropping");
+});
+panel.addEventListener("dragover", e => {
+  if ([...(e.dataTransfer?.types || [])].includes("Files")) e.preventDefault();
+});
+panel.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; panel.classList.remove("dropping"); } });
+panel.addEventListener("drop", e => {
+  const files = [...(e.dataTransfer?.files || [])];
+  dragDepth = 0; panel.classList.remove("dropping");
+  if (!files.length) return;
+  e.preventDefault();
+  if (!activeId()) { alert("Open or dispatch an agent first, then drop the files on its chat."); return; }
+  files.forEach(attachFile);
 });
 
 $("#composer").onsubmit = async e => {
