@@ -761,6 +761,31 @@ def spawn(agent, cmd, cwd):
     return p.returncode, out, err
 
 
+UPLOADS = os.path.join(STATE_DIR, "uploads")
+MIMES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+         ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+         ".pdf": "application/pdf", ".txt": "text/plain", ".log": "text/plain",
+         ".md": "text/plain", ".json": "application/json", ".csv": "text/csv"}
+
+
+def display_name(path):
+    """Strip the <agent>-<nonce>- prefix we add when storing an upload."""
+    return os.path.basename(path).split("-", 2)[-1]
+
+
+def attachments_of(agent):
+    out = []
+    for path, is_image in ([(p, True) for p in agent.get("images", [])] +
+                           [(p, False) for p in agent.get("files", [])]):
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            size = 0
+        out.append({"file": os.path.basename(path), "name": display_name(path),
+                    "image": is_image, "size": size})
+    return out
+
+
 def take_attachments(agent):
     """Hand the pending drops to this turn and clear them."""
     with LOCK:
@@ -872,7 +897,11 @@ def enqueue(agent, text, show_user=True):
         if agent["busy"]:
             return False
         if show_user:
-            agent["messages"].append({"role": "user", "text": text})
+            agent["messages"].append({
+                "role": "user", "text": text,
+                "attachments": [{"file": os.path.basename(p), "name": display_name(p),
+                                 "image": p in agent.get("images", [])}
+                                for p in agent.get("images", []) + agent.get("files", [])]})
         agent["busy"] = True
     save_agent(agent)
     threading.Thread(target=worker, args=(agent, text), daemon=True).start()
@@ -906,7 +935,7 @@ def summary(a):
 
 def public(a):
     return {**summary(a), "messages": a["messages"], "stages": stages_for(a),
-            "pendingImages": len(a.get("images", [])) + len(a.get("files", []))}
+            "attachments": attachments_of(a)}
 
 # ---------------------------------------------------------------- http
 
@@ -1007,6 +1036,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/agents/"):
             a = AGENTS.get(self._part(3))
             self._json(public(a) if a else {"error": "no such agent"}, 200 if a else 404)
+        elif path.startswith("/api/uploads/"):
+            name = os.path.basename(path.split("/api/uploads/", 1)[1])
+            full = os.path.join(UPLOADS, name)
+            if not name or not os.path.isfile(full) or \
+                    os.path.dirname(os.path.realpath(full)) != os.path.realpath(UPLOADS):
+                return self._send(404, "text/plain", b"not found")
+            ctype = MIMES.get(os.path.splitext(name)[1].lower(), "application/octet-stream")
+            with open(full, "rb") as f:
+                self._send(200, ctype, f.read())
         elif path == "/api/tasks":
             with T_LOCK:
                 self._json([{"id": t["id"], "name": t["name"], "running": t["running"],
@@ -1174,9 +1212,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json({"path": dest, "image": is_image, "pending": pending})
         self._send(404, "text/plain", b"not found")
 
-    # ---- DELETE: dismiss an agent, clear its label (worktree is left on disk)
+    # ---- DELETE: drop a pending attachment, or dismiss an agent
     @guarded
     def do_DELETE(self):
+        path, _, query = self.path.partition("?")
+        if path.startswith("/api/agents/") and path.endswith("/attach"):
+            a = AGENTS.get(self._part(3))
+            q = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+            wanted = os.path.basename(q.get("file", ""))
+            if not a:
+                return self._json({"error": "no such agent"}, 404)
+            with LOCK:
+                for key in ("images", "files"):
+                    keep = [p for p in a.get(key, []) if os.path.basename(p) != wanted]
+                    if len(keep) != len(a.get(key, [])):
+                        try:
+                            os.remove(os.path.join(UPLOADS, wanted))
+                        except OSError:
+                            pass
+                    a[key] = keep
+            save_agent(a)
+            return self._json({"attachments": attachments_of(a)})
         if self.path.startswith("/api/agents/"):
             a = AGENTS.get(self._part(3))
             if not a:

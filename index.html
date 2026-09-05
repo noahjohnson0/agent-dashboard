@@ -136,6 +136,19 @@ tailwind.config = {
   .row:hover .dispatch,.row .dispatch:focus-visible{opacity:1}
   .msg{white-space:pre-wrap;word-break:break-word}
   #panel{position:relative}
+  .thumb{position:relative;display:flex;align-items:center;gap:.375rem;max-width:11rem;
+    border:1px solid hsl(var(--border));border-radius:calc(var(--radius) - 4px);
+    padding:.25rem .5rem .25rem .25rem;font-size:11px;background:hsl(var(--background))}
+  .thumb img{width:2rem;height:2rem;object-fit:cover;border-radius:4px;display:block}
+  .thumb .fileicon{width:2rem;height:2rem;display:grid;place-items:center;border-radius:4px;
+    background:hsl(var(--muted));color:hsl(var(--muted-foreground))}
+  .thumb .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .thumb .rm{margin-left:auto;border:0;background:none;color:hsl(var(--muted-foreground));
+    cursor:pointer;font-size:13px;line-height:1;padding:0 2px}
+  .thumb .rm:hover{color:hsl(var(--foreground))}
+  .msg-att{display:flex;flex-wrap:wrap;gap:.375rem;margin-top:.375rem}
+  .msg-att img{max-height:5rem;border-radius:6px;border:1px solid hsl(var(--border));display:block}
+  .msg-att a{font-size:11px;color:hsl(var(--muted-foreground));text-decoration:underline}
   #panel.dropping::after{content:"Drop files for this agent";position:absolute;inset:8px;z-index:40;
     display:grid;place-items:center;pointer-events:none;border:2px dashed hsl(var(--ring));
     border-radius:var(--radius);background:hsl(var(--background)/.85);
@@ -283,6 +296,8 @@ tailwind.config = {
     <div id="agentbar" class="flex flex-wrap items-center gap-1.5 border-b border-border px-2.5 py-1.5 text-xs" hidden></div>
 
     <div id="pbody" class="flex-1 overflow-auto p-3"></div>
+
+    <div id="attachbar" class="flex flex-wrap gap-1.5 border-t border-border px-2 pt-2" hidden></div>
 
     <form id="composer" class="flex items-end gap-1.5 border-t border-border p-2">
       <button id="attach" type="button" class="btn btn-icon" title="Attach files — or paste a screenshot, or drop files on the panel">
@@ -776,15 +791,47 @@ $("#newIssue").onclick = () => {
   $("#msg").placeholder = "Describe the issue…"; $("#msg").focus();
 };
 
+const FILE_ICON = '<svg class="i h-4 w-4" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+const kb = n => n > 1024 * 1024 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+
+/* An upload can be cleaned up later; show the name rather than a broken image. */
+window.attGone = img => {
+  const s = document.createElement("span");
+  s.className = "text-xs text-muted-foreground";
+  s.textContent = img.alt + " (no longer on disk)";
+  img.replaceWith(s);
+};
+
+function renderAttachbar(list){
+  const bar = $("#attachbar");
+  bar.hidden = !list?.length;
+  if (bar.hidden) return;
+  bar.innerHTML = list.map(a => `<span class="thumb" title="${esc(a.name)} · ${kb(a.size)}">
+    ${a.image ? `<img src="/api/uploads/${encodeURIComponent(a.file)}" alt="">`
+              : `<span class="fileicon">${FILE_ICON}</span>`}
+    <span class="nm">${esc(a.name)}</span>
+    <button class="rm" title="Remove" onclick="dropAttachment('${esc(a.file)}')">×</button></span>`).join("");
+}
+window.dropAttachment = async file => {
+  await fetch(`/api/agents/${activeId()}/attach?file=${encodeURIComponent(file)}`, {method: "DELETE"});
+  renderPanel();
+};
+
 function bubble(m){
   const mine = m.role === "user";
   const color = m.role === "error" ? "var(--critical)" : m.role === "system" ? "hsl(var(--muted-foreground))" : "";
   const linked = esc(m.text).replace(/https?:\/\/\S+/g,
     u => `<a class="underline" href="${u}" target="_blank" rel="noopener">${u}</a>`);
+  const att = (m.attachments || []).map(a => a.image
+    ? `<a href="/api/uploads/${encodeURIComponent(a.file)}" target="_blank" rel="noopener">
+         <img src="/api/uploads/${encodeURIComponent(a.file)}" alt="${esc(a.name)}"
+              title="${esc(a.name)}" onerror="attGone(this)"></a>`
+    : `<a href="/api/uploads/${encodeURIComponent(a.file)}" target="_blank" rel="noopener">${esc(a.name)}</a>`).join("");
   return `<div class="mb-3 ${mine ? "text-right" : ""}">
     <div class="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">${mine ? "you" : esc(m.role)}</div>
     <div class="msg inline-block max-w-[94%] rounded-lg border border-border px-2.5 py-1.5 text-left text-[13px]
-      ${mine ? "bg-accent" : ""}" ${color?`style="color:${color}"`:""}>${linked}</div></div>`;
+      ${mine ? "bg-accent" : ""}" ${color?`style="color:${color}"`:""}>${linked}
+      ${att ? `<div class="msg-att">${att}</div>` : ""}</div></div>`;
 }
 
 function stageRail(stages){
@@ -807,7 +854,7 @@ async function renderPanel(){
   if (ui.pview === "console") return renderConsole();
   if (composing === "new-issue" && !activeId()) return;
   if (!activeId()) {
-    $("#stages").hidden = true; $("#agentbar").hidden = true;
+    $("#stages").hidden = true; $("#agentbar").hidden = true; renderAttachbar([]);
     $("#ptitle").textContent = "Chat";
     $("#pbody").innerHTML = `<div class="grid h-full place-items-center text-center text-muted-foreground">
       <div class="max-w-[16rem]">
@@ -825,12 +872,13 @@ async function renderPanel(){
   $("#ptitle").textContent = (a.issue.number ? `#${a.issue.number} · ` : "") + a.provider + " · " + a.mode;
   $("#stages").hidden = false;
   $("#stages").innerHTML = stageRail(a.stages);
+  renderAttachbar(a.attachments);
   $("#agentbar").hidden = false;
   $("#agentbar").innerHTML = `
     ${a.branch ? `<span class="badge font-mono">${esc(a.branch)}</span>` : ""}
     ${a.pr ? `<a class="badge hover:underline" style="color:var(--s3);border-color:var(--s3)66" href="${esc(a.pr)}" target="_blank" rel="noopener">PR</a>` : ""}
     ${a.issue.url ? `<a class="badge hover:underline" href="${esc(a.issue.url)}" target="_blank" rel="noopener">issue</a>` : ""}
-    ${a.pendingImages ? `<span class="badge" style="color:var(--warning);border-color:var(--warning)66">${a.pendingImages} image(s) attached</span>` : ""}
+
     <span class="ml-auto"></span>
     ${a.worktree ? `<button class="btn btn-sm" onclick="task('launch','${a.id}')">Launch branch</button>
                     <button class="btn btn-sm" onclick="task('tests','${a.id}')">Tests</button>` : ""}
@@ -845,7 +893,7 @@ async function renderPanel(){
 async function renderAgents(){
   const list = await api("/api/agents");
   $("#ptitle").textContent = "Agents";
-  $("#stages").hidden = true; $("#agentbar").hidden = true;
+  $("#stages").hidden = true; $("#agentbar").hidden = true; renderAttachbar([]);
   $("#pbody").innerHTML = list.length ? list.map(a => `
     <div class="card mb-2 p-2.5">
       <div class="flex items-center gap-1.5">
@@ -873,7 +921,7 @@ async function renderAgents(){
 async function renderConsole(){
   const tasks = await api("/api/tasks");
   $("#ptitle").textContent = "Console";
-  $("#stages").hidden = true;
+  $("#stages").hidden = true; renderAttachbar([]);
   $("#agentbar").hidden = false;
   $("#agentbar").innerHTML = tasks.slice(-8).reverse().map(t => `
     <button class="btn btn-sm ${t.id === taskId ? "" : "btn-ghost"}" onclick="openTask('${t.id}')">
