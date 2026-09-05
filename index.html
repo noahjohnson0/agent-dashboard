@@ -1,0 +1,805 @@
+<!doctype html>
+<html lang="en" class="dark">
+<meta charset="utf-8">
+<title>agent dashboard</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&display=swap">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: { extend: {
+    fontFamily: { sans:['Geist','ui-sans-serif','system-ui','sans-serif'],
+                  mono:['Geist Mono','ui-monospace','monospace'] },
+    colors: {
+      background:'hsl(var(--background))', foreground:'hsl(var(--foreground))',
+      card:'hsl(var(--card))', muted:'hsl(var(--muted))',
+      'muted-foreground':'hsl(var(--muted-foreground))',
+      accent:'hsl(var(--accent))', 'accent-foreground':'hsl(var(--accent-foreground))',
+      primary:'hsl(var(--primary))', 'primary-foreground':'hsl(var(--primary-foreground))',
+      border:'hsl(var(--border))', input:'hsl(var(--input))', ring:'hsl(var(--ring))',
+    },
+    borderRadius:{ lg:'var(--radius)', md:'calc(var(--radius) - 2px)', sm:'calc(var(--radius) - 4px)' },
+  }}
+}
+</script>
+<style>
+  /* shadcn zinc tokens — dark is the default */
+  :root{--background:0 0% 100%;--foreground:240 10% 3.9%;--card:0 0% 100%;
+    --muted:240 4.8% 95.9%;--muted-foreground:240 3.8% 46.1%;--accent:240 4.8% 95.9%;
+    --accent-foreground:240 5.9% 10%;--primary:240 5.9% 10%;--primary-foreground:0 0% 98%;
+    --border:240 5.9% 90%;--input:240 5.9% 90%;--ring:240 5% 64.9%;--radius:0.625rem}
+  .dark{--background:240 10% 3.9%;--foreground:0 0% 98%;--card:240 6% 7%;
+    --muted:240 3.7% 15.9%;--muted-foreground:240 5% 64.9%;--accent:240 3.7% 15.9%;
+    --accent-foreground:0 0% 98%;--primary:0 0% 98%;--primary-foreground:240 5.9% 10%;
+    --border:240 3.7% 15.9%;--input:240 3.7% 15.9%;--ring:240 4.9% 83.9%}
+  /* status palette (reserved; always paired with a label) */
+  .dark{--good:#0ca30c;--warning:#fab219;--serious:#ec835a;--critical:#d03b3b;
+        --s1:#3987e5;--s2:#d95926;--s3:#199e70}
+  html,body{height:100%}
+  body{background:hsl(var(--background));color:hsl(var(--foreground));
+       font-family:Geist,ui-sans-serif,system-ui,sans-serif}
+  #app{display:flex;height:100%}
+  #app[data-dock=right]{flex-direction:row}
+  #app[data-dock=left]{flex-direction:row-reverse}
+  #app[data-dock=bottom]{flex-direction:column}
+  #app[data-dock=top]{flex-direction:column-reverse}
+  #main{flex:1;min-width:0;min-height:0;overflow:auto}
+  #panel{flex:0 0 auto;display:flex;flex-direction:column;min-width:0;min-height:0;
+         background:hsl(var(--card));--w:420px;--h:48%}
+  #app[data-dock=right] #panel,#app[data-dock=left] #panel{width:var(--w);height:100%}
+  #app[data-dock=top] #panel,#app[data-dock=bottom] #panel{width:100%;height:var(--h)}
+  #app[data-dock=right] #panel{border-left:1px solid hsl(var(--border))}
+  #app[data-dock=left] #panel{border-right:1px solid hsl(var(--border))}
+  #app[data-dock=bottom] #panel{border-top:1px solid hsl(var(--border))}
+  #app[data-dock=top] #panel{border-bottom:1px solid hsl(var(--border))}
+  #app[data-pinned="0"] #panel{position:fixed;z-index:20;margin:12px;border-radius:var(--radius);
+    border:1px solid hsl(var(--border));box-shadow:0 16px 48px rgb(0 0 0/.5)}
+  #app[data-pinned="0"][data-dock=right] #panel{top:0;right:0;bottom:0;height:auto}
+  #app[data-pinned="0"][data-dock=left] #panel{top:0;left:0;bottom:0;height:auto}
+  #app[data-pinned="0"][data-dock=top] #panel{top:0;left:0;right:0;width:auto}
+  #app[data-pinned="0"][data-dock=bottom] #panel{bottom:0;left:0;right:0;width:auto}
+  #app[data-pinned="0"] #grip{display:none}
+  #app[data-hidden="1"] #panel,#app[data-hidden="1"] #grip{display:none}
+  #grip{flex:0 0 auto}
+  #app[data-dock=right] #grip,#app[data-dock=left] #grip{width:5px;cursor:col-resize}
+  #app[data-dock=top] #grip,#app[data-dock=bottom] #grip{height:5px;cursor:row-resize}
+  #grip:hover{background:hsl(var(--accent))}
+  #show{display:none} #app[data-hidden="1"] ~ #show{display:inline-flex}
+  #app[data-main="0"] #main,#app[data-main="0"] #grip{display:none}
+  #app[data-main="0"] #panel{width:100%!important;height:100%!important;
+    position:static!important;margin:0!important;border:0!important;box-shadow:none!important}
+  .atab{display:inline-flex;align-items:center;gap:.375rem;height:1.75rem;padding:0 .25rem 0 .5rem;
+    font-size:12px;border-radius:calc(var(--radius) - 4px);border:1px solid transparent;cursor:pointer;
+    color:hsl(var(--muted-foreground));white-space:nowrap}
+  .atab:hover{background:hsl(var(--accent))}
+  .atab[data-active=true]{background:hsl(var(--accent));color:hsl(var(--accent-foreground));
+    border-color:hsl(var(--border))}
+  .atab .x{opacity:.5;border-radius:4px;padding:0 3px;line-height:1}
+  .atab .x:hover{opacity:1;background:hsl(var(--background))}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:.375rem;white-space:nowrap;
+    border-radius:calc(var(--radius) - 2px);font-size:13px;font-weight:500;height:2rem;padding:0 .625rem;
+    transition:background-color .15s,color .15s,border-color .15s,opacity .15s;cursor:pointer;
+    border:1px solid hsl(var(--border));background:transparent;color:hsl(var(--foreground))}
+  .btn:hover{background:hsl(var(--accent))}
+  .btn:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px}
+  .btn-icon{width:2rem;padding:0} .btn-sm{height:1.75rem;font-size:12px}
+  .btn-ghost{border-color:transparent}
+  .btn-primary{background:hsl(var(--primary));color:hsl(var(--primary-foreground));border-color:transparent}
+  .btn-primary:hover{background:hsl(var(--primary));opacity:.9}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn[aria-pressed=true],.tg .btn[data-active=true]{background:hsl(var(--accent));color:hsl(var(--accent-foreground))}
+  .tg{display:inline-flex;gap:2px;padding:2px;border:1px solid hsl(var(--border));
+      border-radius:calc(var(--radius) - 2px)}
+  .tg .btn{border-color:transparent;height:1.625rem}
+  .tg .btn-icon{width:1.625rem}
+  .inp{height:2rem;border-radius:calc(var(--radius) - 2px);border:1px solid hsl(var(--input));
+    background:transparent;color:inherit;padding:0 .625rem;font-size:13px;font-family:inherit}
+  .inp:focus{outline:2px solid hsl(var(--ring));outline-offset:-1px}
+  .badge{display:inline-flex;align-items:center;gap:.25rem;border:1px solid hsl(var(--border));
+    border-radius:9999px;padding:0 .5rem;font-size:11px;line-height:1.5;font-weight:500;white-space:nowrap}
+  .dot{width:6px;height:6px;border-radius:9999px;flex:none}
+  .card{border:1px solid hsl(var(--border));border-radius:var(--radius);background:hsl(var(--card))}
+  svg.i{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;
+        stroke-linecap:round;stroke-linejoin:round}
+  .row:hover{background:hsl(var(--accent)/.45)}
+  .row .dispatch{opacity:0}
+  .row:hover .dispatch,.row .dispatch:focus-visible{opacity:1}
+  .msg{white-space:pre-wrap;word-break:break-word}
+  .dots::after{content:"";animation:d 1.2s steps(4,end) infinite}
+  @keyframes rowin{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  #list li{animation:rowin .28s cubic-bezier(.2,.7,.3,1) both}
+  @media (prefers-reduced-motion:reduce){#list li{animation:none}}
+  .skel{background:linear-gradient(90deg,hsl(var(--muted)) 25%,hsl(var(--accent)) 37%,hsl(var(--muted)) 63%);
+    background-size:400% 100%;animation:sk 1.4s ease infinite;border-radius:6px;height:10px}
+  @keyframes sk{0%{background-position:100% 0}100%{background-position:0 0}}
+  @keyframes d{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+  details>summary{cursor:pointer;list-style:none}
+  details>summary::-webkit-details-marker{display:none}
+  details[open] .chev{transform:rotate(90deg)}
+  .chev{transition:transform .15s}
+  pre.console{white-space:pre-wrap;word-break:break-word;font-family:'Geist Mono',ui-monospace,monospace;
+    font-size:11.5px;line-height:1.5}
+  /* vertical stage rail */
+  .rail{position:relative;padding-left:18px}
+  .rail::before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:1px;
+    background:hsl(var(--border))}
+  .stage{position:relative;font-size:11.5px;line-height:1.6;color:hsl(var(--muted-foreground))}
+  .stage::before{content:"";position:absolute;left:-16px;top:5px;width:9px;height:9px;border-radius:50%;
+    border:1px solid hsl(var(--border));background:hsl(var(--card))}
+  .stage[data-done=true]{color:hsl(var(--foreground))}
+  .stage[data-done=true]::before{background:var(--good);border-color:var(--good)}
+  .stage[data-current=true]{color:hsl(var(--foreground));font-weight:600}
+  .stage[data-current=true]::before{background:var(--warning);border-color:var(--warning);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--warning) 25%,transparent);animation:p 1.4s ease-in-out infinite}
+  @keyframes p{50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--warning) 10%,transparent)}}
+</style>
+
+<body class="text-sm">
+<div id="app" data-dock="right" data-pinned="1" data-hidden="0">
+
+  <div id="main">
+    <!-- top bar -->
+    <div class="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-background/95 px-5 py-2.5 backdrop-blur">
+      <span id="repoName" class="font-semibold tracking-tight">…</span>
+      <div class="tg" id="tabs">
+        <button class="btn btn-sm px-2.5" data-tab="issues" data-active="true">Issues</button>
+        <button class="btn btn-sm px-2.5" data-tab="roadmap">Roadmap</button>
+        <button class="btn btn-sm px-2.5" data-tab="stats">Stats</button>
+      </div>
+      <div class="ml-auto flex items-center gap-2">
+        <a id="repoLink" class="text-xs font-mono text-muted-foreground hover:underline"
+           href="#" target="_blank" rel="noopener"></a>
+        <button id="collapse" class="btn btn-sm btn-icon" title="Collapse the issue list (chat only)">
+          <svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="M7 9h4"/><path d="M7 13h4"/></svg></button>
+        <span id="me" class="flex items-center gap-1.5 rounded-full border border-border py-0.5 pl-0.5 pr-2.5"></span>
+      </div>
+    </div>
+
+    <!-- issues -->
+    <section data-view="issues" class="mx-auto max-w-4xl p-5">
+      <div class="flex flex-wrap items-center gap-2">
+        <input id="q" class="inp min-w-[150px] flex-1" placeholder="Filter issues…">
+        <div class="tg" id="stateGroup">
+          <button class="btn btn-sm px-2" data-state="open" data-active="true">Open</button>
+          <button class="btn btn-sm px-2" data-state="closed">Closed</button>
+          <button class="btn btn-sm px-2" data-state="all">All</button>
+        </div>
+        <button id="refresh" class="btn btn-icon" title="Refresh">
+          <svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg></button>
+      </div>
+      <div class="mt-2 flex flex-wrap items-center gap-2">
+        <button id="newIssue" class="btn btn-sm">
+          <svg class="i" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>New issue</button>
+        <span class="mx-1 h-4 w-px bg-border"></span>
+        <button id="launch" class="btn btn-sm" hidden title="Run the configured launch command in the main checkout">
+          <svg class="i" viewBox="0 0 24 24"><path d="m6 3 14 9-14 9Z"/></svg>Launch</button>
+        <button id="tests" class="btn btn-sm" hidden title="Run the configured test suites">
+          <svg class="i" viewBox="0 0 24 24"><path d="M9 3h6"/><path d="M10 3v6.5L5 20a1 1 0 0 0 .9 1.5h12.2A1 1 0 0 0 19 20l-5-10.5V3"/></svg>Run tests</button>
+        <button id="killGodot" class="btn btn-sm" hidden title="Terminate every matching process on this machine">
+          <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Kill</button>
+        <span id="count" class="ml-auto text-xs text-muted-foreground"></span>
+      </div>
+      <ul id="list" class="mt-3"></ul>
+    </section>
+
+    <!-- roadmap -->
+    <section data-view="roadmap" hidden class="mx-auto max-w-4xl p-5"><div id="roadmap"></div></section>
+
+    <!-- stats -->
+    <section data-view="stats" hidden class="mx-auto max-w-4xl p-5"><div id="stats"></div></section>
+  </div>
+
+  <div id="grip" title="Drag to resize"></div>
+
+  <!-- side panel -->
+  <aside id="panel">
+    <div class="flex items-center gap-1.5 border-b border-border px-2.5 py-2">
+      <span id="ptitle" class="mr-auto truncate text-xs font-semibold uppercase tracking-wider text-muted-foreground">Chat</span>
+      <div class="tg" id="dockGroup">
+        <button class="btn btn-icon" data-dock="left" title="Dock left"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button>
+        <button class="btn btn-icon" data-dock="right" title="Dock right"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button>
+        <button class="btn btn-icon" data-dock="top" title="Dock top"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg></button>
+        <button class="btn btn-icon" data-dock="bottom" title="Dock bottom"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button>
+      </div>
+      <button id="pin" class="btn btn-icon" aria-pressed="true" title="Pin / float">
+        <svg class="i" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></button>
+      <button id="expand" class="btn btn-icon" title="Show the issue list again">
+        <svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button>
+      <button id="close" class="btn btn-icon" title="Hide panel">
+        <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-1.5 border-b border-border px-2.5 py-1.5">
+      <div class="tg" id="pviews">
+        <button class="btn btn-sm px-2" data-pview="chat" data-active="true">Chat</button>
+        <button class="btn btn-sm px-2" data-pview="agents">Agents</button>
+        <button class="btn btn-sm px-2" data-pview="console">Console</button>
+      </div>
+      <div class="tg" id="providerGroup" title="Which CLI runs the agent">
+        <button class="btn btn-sm px-2" data-provider="claude" data-active="true">Claude</button>
+        <button class="btn btn-sm px-2" data-provider="codex">Codex</button>
+      </div>
+      <div class="tg" id="modeGroup" title="Plan reads only; Build gets a worktree, branch and draft PR">
+        <button class="btn btn-sm px-2" data-mode="plan" data-active="true">Plan</button>
+        <button class="btn btn-sm px-2" data-mode="build">Build</button>
+      </div>
+      <input id="model" class="inp btn-sm w-20 min-w-0 flex-1" placeholder="model">
+    </div>
+
+    <div id="atabs" class="flex items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5" hidden></div>
+    <div id="stages" class="border-b border-border px-3 py-2" hidden></div>
+    <div id="agentbar" class="flex flex-wrap items-center gap-1.5 border-b border-border px-2.5 py-1.5 text-xs" hidden></div>
+
+    <div id="pbody" class="flex-1 overflow-auto p-3"></div>
+
+    <form id="composer" class="flex items-end gap-1.5 border-t border-border p-2">
+      <button id="attach" type="button" class="btn btn-icon" title="Attach a screenshot (or just paste one)">
+        <svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4.6-4.6a2 2 0 0 0-2.8 0L3 21"/></svg></button>
+      <input id="file" type="file" accept="image/*" multiple hidden>
+      <textarea id="msg" rows="1" class="inp flex-1 resize-none py-1.5"
+        style="min-height:2rem;max-height:9rem" placeholder="Message the agent…"></textarea>
+      <button id="send" class="btn btn-icon btn-primary" type="submit" title="Send">
+        <svg class="i" viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg></button>
+    </form>
+  </aside>
+</div>
+<button id="show" class="btn btn-primary fixed bottom-4 right-4 z-30">
+  <svg class="i" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>Chat</button>
+
+<script>
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const app = $("#app"), panel = $("#panel");
+const esc = t => String(t ?? "").replace(/[<&>"]/g, c => ({"<":"&lt;","&":"&amp;",">":"&gt;",'"':"&quot;"}[c]));
+const api = (u, o) => fetch(u, o).then(r => r.json());
+const post = (u, b) => api(u, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(b||{})});
+const BOT = '<svg class="i" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>';
+
+/* ---------------- persisted UI state ---------------- */
+const DEF = {dock:"right", pinned:"1", hidden:"0", main:"1", w:"420px", h:"48%",
+             provider:"claude", mode:"plan", model:"", issueState:"open", tab:"issues", pview:"chat",
+             tabs: [], active: null};
+let ui = {...DEF};
+try { ui = {...DEF, ...JSON.parse(localStorage.getItem("swordPanel") || "{}")}; } catch(e){}
+
+function applyUI(){
+  app.dataset.dock = ui.dock; app.dataset.pinned = ui.pinned; app.dataset.hidden = ui.hidden;
+  app.dataset.main = ui.main;
+  panel.style.setProperty("--w", ui.w); panel.style.setProperty("--h", ui.h);
+  $$("#dockGroup .btn").forEach(b => b.dataset.active = b.dataset.dock === ui.dock);
+  $$("#providerGroup .btn").forEach(b => b.dataset.active = b.dataset.provider === ui.provider);
+  $$("#modeGroup .btn").forEach(b => b.dataset.active = b.dataset.mode === ui.mode);
+  $$("#stateGroup .btn").forEach(b => b.dataset.active = b.dataset.state === ui.issueState);
+  $$("#tabs .btn").forEach(b => b.dataset.active = b.dataset.tab === ui.tab);
+  $$("#pviews .btn").forEach(b => b.dataset.active = b.dataset.pview === ui.pview);
+  $$("[data-view]").forEach(v => v.hidden = v.dataset.view !== ui.tab);
+  $("#pin").setAttribute("aria-pressed", ui.pinned === "1");
+  $("#expand").hidden = ui.main === "1";
+  $("#pin").hidden = $("#dockGroup").hidden = ui.main === "0";
+  if ($("#model").value !== ui.model) $("#model").value = ui.model;
+  try { localStorage.setItem("swordPanel", JSON.stringify(ui)); } catch(e){}
+}
+$$("#dockGroup .btn").forEach(b => b.onclick = () => { ui.dock = b.dataset.dock; applyUI(); });
+$$("#providerGroup .btn").forEach(b => b.onclick = () => { ui.provider = b.dataset.provider; applyUI(); });
+$$("#modeGroup .btn").forEach(b => b.onclick = () => { ui.mode = b.dataset.mode; applyUI(); });
+$("#model").oninput = e => { ui.model = e.target.value.trim(); applyUI(); };
+$("#pin").onclick = () => { ui.pinned = ui.pinned === "1" ? "0" : "1"; applyUI(); };
+$("#collapse").onclick = () => { ui.main = "0"; ui.hidden = "0"; applyUI(); };
+$("#expand").onclick = () => { ui.main = "1"; applyUI(); };
+$("#close").onclick = () => { ui.hidden = "1"; applyUI(); };
+$("#show").onclick = () => { ui.hidden = "0"; applyUI(); };
+$$("#tabs .btn").forEach(b => b.onclick = () => { ui.tab = b.dataset.tab; applyUI(); loadTab(); });
+$$("#pviews .btn").forEach(b => b.onclick = () => { ui.pview = b.dataset.pview; applyUI(); renderPanel(); });
+
+$("#grip").addEventListener("pointerdown", e => {
+  if (ui.pinned !== "1") return;
+  e.preventDefault();
+  const horiz = ui.dock === "left" || ui.dock === "right";
+  const move = ev => {
+    if (horiz) ui.w = Math.min(Math.max(ui.dock === "right" ? innerWidth - ev.clientX : ev.clientX, 300), innerWidth - 300) + "px";
+    else ui.h = Math.min(Math.max(ui.dock === "bottom" ? innerHeight - ev.clientY : ev.clientY, 160), innerHeight - 200) + "px";
+    applyUI();
+  };
+  const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
+  addEventListener("pointermove", move); addEventListener("pointerup", up);
+});
+applyUI();
+
+/* ---------------- who am I ---------------- */
+api("/api/me").then(me => {
+  window.ME = me;
+  $("#me").innerHTML = `<img src="${esc(me.avatar)}" alt="" class="h-5 w-5 rounded-full">
+    <span class="text-xs font-medium">${esc(me.login)}</span>`;
+  $("#repoName").textContent = me.repoName || "dashboard";
+  $("#repoLink").textContent = me.repo || "no repo detected";
+  $("#repoLink").href = me.repo ? "https://github.com/" + me.repo : "#";
+  document.title = (me.repoName || "agent") + " dashboard";
+  const c = me.config || {};
+  $("#launch").hidden = !(c.launch && c.launch.length);
+  $("#tests").hidden = !(c.suites && c.suites.length);
+  $("#killGodot").hidden = !c.killPattern;
+  $("#killGodot").lastChild.textContent = "Kill " + (c.killPattern || "");
+  $$("#tabs .btn").find(b => b.dataset.tab === "roadmap").hidden = !c.tracker;
+});
+
+/* ---------------- issues ---------------- */
+let data = [];
+const ago = d => { const s = (Date.now() - new Date(d)) / 1000;
+  for (const [n,v] of [["d",86400],["h",3600],["m",60]]) if (s >= v) return Math.floor(s/v) + n + " ago";
+  return "just now"; };
+
+const STATUS_STYLE = {
+  "todo":            ["", "hsl(var(--muted-foreground))"],
+  "claimed":         ["claimed", "var(--s1)"],
+  "agent dispatched":["agent dispatched", "var(--warning)"],
+  "agent working":   ["agent working", "var(--warning)"],
+  "in review":       ["in review", "var(--s3)"],
+  "closed":          ["closed", "hsl(var(--muted-foreground))"],
+};
+
+function statusChip(i){
+  let [text, color] = STATUS_STYLE[i.status] || ["", ""];
+  if (i.status === "claimed" && i.claimedBy.length) text = "claimed by " + i.claimedBy.join(", ");
+  if (i.status === "in review" && i.prs.length)
+    text = (i.prs[0].draft ? "draft PR #" : "PR #") + i.prs[0].number;
+  if (!text) return "";
+  return `<span class="badge" style="color:${color};border-color:${color}66">
+    <span class="dot" style="background:${color}"></span>${esc(text)}</span>`;
+}
+
+function render(){
+  const q = $("#q").value.toLowerCase();
+  const rows = data.filter(i => !q ||
+    (i.number + " " + i.title + " " + (i.author?.login||"") + " " + i.labels.map(l=>l.name).join(" "))
+      .toLowerCase().includes(q));
+  $("#count").textContent = rows.length + (rows.length === 1 ? " issue" : " issues");
+  $("#list").innerHTML = rows.length ? rows.map((i, idx) => `
+    <li class="row flex items-baseline gap-3 rounded-md border-t border-border px-2 py-2.5"
+        style="animation-delay:${Math.min(idx * 28, 700)}ms">
+      <span class="w-11 shrink-0 font-mono text-xs text-muted-foreground">#${i.number}</span>
+      <span class="min-w-0 flex-1">
+        <a class="hover:underline" href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a>
+        ${statusChip(i)}
+        ${i.labels.map(l => `<span class="badge ml-1" style="border-color:#${l.color}80;color:#${l.color}">${esc(l.name)}</span>`).join("")}
+        <span class="ml-1.5 text-xs text-muted-foreground">by ${esc(i.author?.login || "?")}</span>
+      </span>
+      <span class="shrink-0 text-xs text-muted-foreground">${i.comments?.length ? i.comments.length + " ✦ " : ""}${ago(i.updatedAt)}</span>
+      ${i.agentId ? `<button class="btn btn-sm btn-icon shrink-0" title="Open this agent" onclick="openAgent('${i.agentId}','#${i.number}')">${BOT}</button>`
+                  : `<button class="dispatch btn btn-sm btn-icon shrink-0" title="Dispatch a ${ui.mode} agent on #${i.number}" onclick="dispatch(${i.number})">${BOT}</button>`}
+    </li>`).join("") : '<li class="py-10 text-center text-muted-foreground">No issues match.</li>';
+}
+
+function skeleton(){
+  $("#count").innerHTML = '<span class="dots">Fetching issues from GitHub</span>';
+  $("#list").innerHTML = Array.from({length: 7}, (_, i) => `
+    <li class="flex items-center gap-3 border-t border-border px-2 py-3.5" style="animation-delay:${i*40}ms">
+      <span class="skel w-9"></span><span class="skel" style="width:${38 + (i*13) % 42}%"></span>
+      <span class="skel ml-auto w-16"></span></li>`).join("");
+}
+
+/* Issues are cached per state: a tab switch renders instantly from cache and
+   revalidates in the background. A visible Issues tab refreshes every 60s. */
+const issueCache = {};
+let issueTimer = null, lastFetch = 0;
+
+async function loadIssues({force = false} = {}){
+  const state = ui.issueState;
+  const cached = issueCache[state];
+  if (cached) { data = cached; render(); }
+  else skeleton();
+  if (!force && cached && Date.now() - lastFetch < 15000) return;
+  const fresh = await api("/api/issues?state=" + state);
+  lastFetch = Date.now();
+  issueCache[state] = fresh;
+  if (ui.issueState === state) { data = fresh; render(); }
+}
+
+function issueAutoRefresh(on){
+  clearInterval(issueTimer); issueTimer = null;
+  if (on) issueTimer = setInterval(() => {
+    if (!document.hidden && ui.tab === "issues") loadIssues({force: true});
+  }, 60000);
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && ui.tab === "issues" && Date.now() - lastFetch > 60000) loadIssues({force: true});
+});
+$("#q").oninput = render;
+$("#refresh").onclick = () => { lastFetch = 0; loadTab(true); };
+$$("#stateGroup .btn").forEach(b => b.onclick = () => { ui.issueState = b.dataset.state; applyUI(); loadIssues(); });
+
+/* ---------------- charts (dataviz: 2px lines, one axis, legend + hover) ------- */
+function lineChart({series, labels, height = 140, fmt = v => v}){
+  const W = 640, H = height, P = {l: 34, r: 8, t: 10, b: 20};
+  const n = Math.max(...series.map(s => s.values.length));
+  if (!n) return '<div class="py-6 text-center text-xs text-muted-foreground">No samples yet.</div>';
+  const max = Math.max(1, ...series.flatMap(s => s.values.filter(v => v != null)));
+  const x = i => P.l + (W - P.l - P.r) * (n === 1 ? .5 : i / (n - 1));
+  const y = v => H - P.b - (H - P.t - P.b) * (v / max);
+  const ticks = [0, max / 2, max];
+  const grid = ticks.map(t => `<line x1="${P.l}" x2="${W-P.r}" y1="${y(t)}" y2="${y(t)}"
+      stroke="hsl(var(--border))" stroke-width="1"/>
+    <text x="${P.l-6}" y="${y(t)+3}" text-anchor="end" font-size="9"
+      fill="hsl(var(--muted-foreground))">${fmt(Math.round(t*10)/10)}</text>`).join("");
+  const paths = series.map(s => {
+    const d = s.values.map((v, i) => (v == null ? null : `${x(i)},${y(v)}`)).filter(Boolean).join(" L ");
+    return d ? `<path d="M ${d}" fill="none" stroke="${s.color}" stroke-width="2"
+      stroke-linejoin="round" stroke-linecap="round"/>` : "";
+  }).join("");
+  const xlab = labels ? labels.map((l, i) => (i % Math.ceil(n / 6) === 0
+      ? `<text x="${x(i)}" y="${H-6}" text-anchor="middle" font-size="9"
+           fill="hsl(var(--muted-foreground))">${esc(l)}</text>` : "")).join("") : "";
+  const legend = series.map(s => `<span class="badge" style="border-color:${s.color}66">
+      <span class="dot" style="background:${s.color}"></span>${esc(s.name)}
+      <span class="text-muted-foreground">${fmt(s.values.filter(v=>v!=null).at(-1) ?? "–")}</span></span>`).join("");
+  const hot = Array.from({length: n}, (_, i) => `<rect x="${x(i) - (W/n/2)}" y="${P.t}"
+      width="${W/n}" height="${H-P.t-P.b}" fill="transparent"
+      data-i="${i}" class="hot"><title>${esc(labels?.[i] ?? "")}
+${series.map(s => `${s.name}: ${s.values[i] ?? "–"}`).join("\n")}</title></rect>`).join("");
+  return `<div class="mb-1.5 flex flex-wrap gap-1.5">${legend}</div>
+    <svg viewBox="0 0 ${W} ${H}" class="w-full" style="height:auto;display:block">${grid}${paths}${xlab}${hot}</svg>`;
+}
+
+/* ---------------- roadmap ---------------- */
+const RSTATUS = {Resolved:"var(--good)", Verification:"var(--warning)",
+                 Open:"var(--critical)", Deferred:"hsl(var(--muted-foreground))"};
+
+async function loadRoadmap(){
+  const r = await api("/api/roadmap");
+  if (r.error) { $("#roadmap").innerHTML = `<div class="text-[color:var(--critical)]">${esc(r.error)}</div>`; return; }
+  const order = ["Resolved","Verification","Open","Deferred"];
+  const gating = r.counts.Resolved + r.counts.Verification + r.counts.Open;
+  const pct = Math.round(100 * r.counts.Resolved / Math.max(1, gating));
+  const meter = order.map(k => r.counts[k]
+      ? `<div style="width:${100*r.counts[k]/r.tracked}%;background:${RSTATUS[k]}" title="${k}: ${r.counts[k]}"></div>` : "").join("");
+  const legend = order.map(k => `<span class="badge" style="border-color:${RSTATUS[k]}66">
+      <span class="dot" style="background:${RSTATUS[k]}"></span>${k}
+      <span class="text-muted-foreground">${r.counts[k]}</span></span>`).join("");
+  const tl = r.timeline.map((t, i) => `
+    <div class="relative flex-1 min-w-[92px]">
+      <div class="mb-1.5 h-1 rounded-full" style="background:${i === r.timeline.length-1 ? "var(--s1)" : "hsl(var(--border))"}"></div>
+      <div class="font-mono text-[11px]">${esc(t.date)}</div>
+      <div class="text-[11px] text-muted-foreground" title="${esc(t.items.join(', '))}">${t.n} update${t.n===1?"":"s"}</div>
+    </div>`).join("");
+  const sections = r.sections.map(s => {
+    const c = s.counts, total = c.Open + c.Verification + c.Resolved + c.Deferred;
+    const bar = order.map(k => c[k] ? `<div style="width:${100*c[k]/total}%;background:${RSTATUS[k]}"></div>` : "").join("");
+    return `<details class="card mb-2 px-3 py-2">
+      <summary class="flex items-center gap-2">
+        <svg class="i chev h-3 w-3" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+        <span class="font-medium">${esc(s.title)}</span>
+        ${total ? `<span class="ml-auto flex h-1.5 w-24 overflow-hidden rounded-full bg-muted">${bar}</span>
+          <span class="w-14 text-right text-xs text-muted-foreground">${c.Resolved}/${total}</span>` : ""}
+      </summary>
+      <div class="mt-2 space-y-2">
+        ${s.notes.slice(0, 6).map(n => `<p class="text-xs text-muted-foreground">${esc(n).slice(0,400)}</p>`).join("")}
+        ${s.items.map(it => `
+          <div class="rounded-md border border-border px-2.5 py-2">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="font-mono text-xs">${esc(it.id)}</span>
+              <span class="badge" style="color:${RSTATUS[it.status]};border-color:${RSTATUS[it.status]}66">
+                <span class="dot" style="background:${RSTATUS[it.status]}"></span>${esc(it.status)}</span>
+              <span class="badge text-muted-foreground">${esc(it.severity)}</span>
+              ${it.issues.map(n => `<a class="badge hover:underline" target="_blank" rel="noopener"
+                 href="https://github.com/${(window.ME?.repo)||""}/issues/${n}">#${n}</a>
+                 <button class="btn btn-sm btn-icon" title="Dispatch an agent on #${n}" onclick="dispatch(${n})">${BOT}</button>`).join("")}
+              ${it.dates.length ? `<span class="ml-auto font-mono text-[11px] text-muted-foreground">${esc(it.dates.at(-1))}</span>` : ""}
+            </div>
+            <p class="mt-1 text-xs">${esc(it.finding)}</p>
+            ${it.evidence ? `<p class="mt-1 text-xs text-muted-foreground">${esc(it.evidence)}</p>` : ""}
+          </div>`).join("")}
+      </div></details>`;
+  }).join("");
+
+  $("#roadmap").innerHTML = `
+    <div class="card p-4">
+      <div class="flex flex-wrap items-end gap-4">
+        <div><div class="text-4xl font-semibold tracking-tight">${pct}<span class="text-xl text-muted-foreground">%</span></div>
+          <div class="text-xs text-muted-foreground">of ${gating} release gates resolved</div></div>
+        <div class="ml-auto text-right text-xs text-muted-foreground">
+          Alpha 0.1 · tracker updated <span class="font-mono">${esc(r.updated || "?")}</span></div>
+      </div>
+      <div class="mt-3 flex h-2.5 overflow-hidden rounded-full bg-muted">${meter}</div>
+      <div class="mt-2 flex flex-wrap gap-1.5">${legend}</div>
+    </div>
+    <div class="card mt-3 p-4">
+      <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Timeline</div>
+      <div class="flex gap-3 overflow-x-auto pb-1">${tl}</div>
+    </div>
+    <div class="mt-3">${sections}</div>`;
+}
+
+/* ---------------- stats ---------------- */
+async function loadStats(){
+  const s = await api("/api/stats?n=240");
+  const h = s.history, at = k => h.map(p => p[k] ?? null);
+  const tile = (label, value, sub, color) => `<div class="card p-3">
+      <div class="text-xs text-muted-foreground">${esc(label)}</div>
+      <div class="mt-0.5 text-2xl font-semibold tracking-tight" ${color?`style="color:${color}"`:""}>${esc(value)}</div>
+      <div class="text-[11px] text-muted-foreground">${esc(sub)}</div></div>`;
+  const iss = s.issues;
+  $("#stats").innerHTML = `
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      ${tile("Load (1m)", s.now.load ?? "–", "this machine")}
+      ${tile("Memory", (s.now.mem ?? "–") + "%", "wired + active")}
+      ${tile((s.killPattern || "watched") + " procs", s.now.procs ?? 0,
+             s.pids.slice(0,4).join(" ") || "none running")}
+      ${tile("Server", s.server.host ? (s.server.up ? Math.round(s.server.ping) + " ms" : "down")
+             : "not set", s.server.host || "set a host below",
+             s.server.host ? (s.server.up ? "var(--good)" : "var(--critical)") : "")}
+    </div>
+    <div class="card mt-3 p-4">
+      <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Live · last ${h.length} samples (15s apart)</div>
+      ${lineChart({series:[
+         {name:"load", color:"var(--s1)", values: at("load")},
+         {name:"memory %", color:"var(--s2)", values: at("mem")},
+         {name:(s.killPattern || "watched") + " procs", color:"var(--s3)", values: at("procs")}],
+         labels: h.map(p => new Date(p.t*1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}))})}
+    </div>
+    <div class="card mt-3 p-4">
+      <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Issue throughput · weekly</div>
+      ${lineChart({series:[
+         {name:"opened", color:"var(--s2)", values: iss.opened},
+         {name:"closed", color:"var(--s3)", values: iss.closed},
+         {name:"open backlog", color:"var(--s1)", values: iss.backlog}],
+         labels: iss.weeks})}
+    </div>
+    <div class="card mt-3 flex flex-wrap items-center gap-2 p-4">
+      <span class="text-xs text-muted-foreground">Server host to ping (every 15s)</span>
+      <input id="gameHost" class="inp flex-1" placeholder="vps.example.com" value="${esc(s.config.gameHost || "")}">
+      <button class="btn btn-sm" onclick="saveHost()">Save</button>
+    </div>`;
+}
+window.saveHost = async () => { await post("/api/config", {gameHost: $("#gameHost").value.trim()}); loadStats(); };
+
+let statsTimer = null;
+function loadTab(force){
+  clearInterval(statsTimer); statsTimer = null;
+  issueAutoRefresh(ui.tab === "issues");
+  if (ui.tab === "issues") loadIssues({force});
+  if (ui.tab === "roadmap") loadRoadmap();
+  if (ui.tab === "stats") { loadStats(); statsTimer = setInterval(loadStats, 15000); }
+}
+
+/* ---------------- agents + tasks ---------------- */
+let taskId = null, composing = null, poll = null, agentsCache = [];
+const activeId = () => ui.active;
+
+function setPoll(on){
+  clearInterval(poll); poll = null;
+  if (on) poll = setInterval(renderPanel, 1500);
+}
+
+/* one tab per open agent chat; closing a tab keeps the agent running */
+function addTab(id, label){
+  if (!ui.tabs.some(t => t.id === id)) ui.tabs.push({id, label: label || id});
+  else if (label) ui.tabs.find(t => t.id === id).label = label;
+  ui.active = id; applyUI();
+}
+function closeTab(id){
+  ui.tabs = ui.tabs.filter(t => t.id !== id);
+  if (ui.active === id) ui.active = ui.tabs.at(-1)?.id || null;
+  applyUI(); renderPanel();
+}
+window.closeTab = closeTab;
+window.selectTab = id => { ui.active = id; composing = null; applyUI(); setPoll(true); renderPanel(); };
+
+function renderTabs(){
+  const bar = $("#atabs");
+  bar.hidden = ui.pview !== "chat" || !ui.tabs.length;
+  if (bar.hidden) return;
+  bar.innerHTML = ui.tabs.map(t => {
+    const a = agentsCache.find(x => x.id === t.id);
+    const busy = a?.busy;
+    return `<span class="atab" data-active="${t.id === ui.active}" onclick="selectTab('${t.id}')">
+      <span class="dot" style="background:${busy ? "var(--warning)" : "hsl(var(--muted-foreground))"};
+        ${busy ? "animation:p 1.4s ease-in-out infinite" : ""}"></span>
+      ${esc(t.label)}
+      <span class="x" onclick="event.stopPropagation();closeTab('${t.id}')" title="Close tab">×</span></span>`;
+  }).join("");
+}
+
+async function dispatch(number){
+  ui.hidden = "0"; ui.pview = "chat"; applyUI();
+  composing = null;
+  $("#pbody").innerHTML = `<div class="text-muted-foreground">Dispatching ${ui.provider} (${ui.mode}) on #${number}<span class="dots"></span></div>`;
+  const a = await post("/api/agents", {number, provider: ui.provider, mode: ui.mode, model: ui.model});
+  if (a.error) { $("#pbody").innerHTML = `<div style="color:var(--critical)">${esc(a.error)}</div>`; return; }
+  addTab(a.id, "#" + number); setPoll(true); renderPanel(); loadIssues({force: true});
+}
+window.dispatch = dispatch;
+window.openAgent = (id, label) => { composing = null; ui.hidden = "0"; ui.pview = "chat";
+  addTab(id, label); setPoll(true); renderPanel(); };
+window.openTask = id => { taskId = id; ui.hidden = "0"; ui.pview = "console"; applyUI(); setPoll(true); renderPanel(); };
+
+$("#newIssue").onclick = () => {
+  ui.hidden = "0"; ui.pview = "chat"; applyUI();
+  ui.active = null; composing = "new-issue"; applyUI(); setPoll(false);
+  $("#ptitle").textContent = "New issue";
+  $("#stages").hidden = true; $("#agentbar").hidden = true;
+  $("#pbody").innerHTML = `<div class="text-muted-foreground">Describe the issue below. A ${ui.provider} agent
+    reads the repo, writes it up properly and files it on GitHub.</div>`;
+  $("#msg").placeholder = "Describe the issue…"; $("#msg").focus();
+};
+
+function bubble(m){
+  const mine = m.role === "user";
+  const color = m.role === "error" ? "var(--critical)" : m.role === "system" ? "hsl(var(--muted-foreground))" : "";
+  const linked = esc(m.text).replace(/https?:\/\/\S+/g,
+    u => `<a class="underline" href="${u}" target="_blank" rel="noopener">${u}</a>`);
+  return `<div class="mb-3 ${mine ? "text-right" : ""}">
+    <div class="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">${mine ? "you" : esc(m.role)}</div>
+    <div class="msg inline-block max-w-[94%] rounded-lg border border-border px-2.5 py-1.5 text-left text-[13px]
+      ${mine ? "bg-accent" : ""}" ${color?`style="color:${color}"`:""}>${linked}</div></div>`;
+}
+
+function stageRail(stages){
+  if (!stages?.length) return "";
+  return `<div class="rail">${stages.map(s => `<div class="stage" data-done="${s.done}" data-current="${s.current}">
+    ${s.done ? "✓ " : ""}${esc(s.name)}</div>`).join("")}</div>`;
+}
+
+async function renderPanel(){
+  agentsCache = await api("/api/agents").catch(() => agentsCache);
+  ui.tabs = ui.tabs.filter(t => agentsCache.some(a => a.id === t.id));
+  if (ui.active && !ui.tabs.some(t => t.id === ui.active)) ui.active = ui.tabs.at(-1)?.id || null;
+  renderTabs();
+  if (ui.pview === "agents") return renderAgents();
+  if (ui.pview === "console") return renderConsole();
+  if (composing === "new-issue" && !activeId()) return;
+  if (!activeId()) {
+    $("#stages").hidden = true; $("#agentbar").hidden = true;
+    $("#ptitle").textContent = "Chat";
+    $("#pbody").innerHTML = `<div class="grid h-full place-items-center text-center text-muted-foreground">
+      <div><div class="text-2xl">Chat</div>
+      <div class="mt-1 text-xs">Hover an issue and hit ${"the bot icon"} to dispatch an agent.</div></div></div>`;
+    return;
+  }
+  const a = await api("/api/agents/" + activeId());
+  if (a.error) { closeTab(activeId()); return; }
+  const t = $("#pbody"), bottom = t.scrollHeight - t.scrollTop - t.clientHeight < 80;
+  $("#ptitle").textContent = (a.issue.number ? `#${a.issue.number} · ` : "") + a.provider + " · " + a.mode;
+  $("#stages").hidden = false;
+  $("#stages").innerHTML = stageRail(a.stages);
+  $("#agentbar").hidden = false;
+  $("#agentbar").innerHTML = `
+    ${a.branch ? `<span class="badge font-mono">${esc(a.branch)}</span>` : ""}
+    ${a.pr ? `<a class="badge hover:underline" style="color:var(--s3);border-color:var(--s3)66" href="${esc(a.pr)}" target="_blank" rel="noopener">PR</a>` : ""}
+    ${a.issue.url ? `<a class="badge hover:underline" href="${esc(a.issue.url)}" target="_blank" rel="noopener">issue</a>` : ""}
+    ${a.pendingImages ? `<span class="badge" style="color:var(--warning);border-color:var(--warning)66">${a.pendingImages} image(s) attached</span>` : ""}
+    <span class="ml-auto"></span>
+    ${a.worktree ? `<button class="btn btn-sm" onclick="task('launch','${a.id}')">Launch branch</button>
+                    <button class="btn btn-sm" onclick="task('tests','${a.id}')">Tests</button>` : ""}
+    ${a.busy ? `<button class="btn btn-sm" onclick="stopAgent('${a.id}')">Stop</button>` : ""}
+    <button class="btn btn-sm" onclick="dismissAgent('${a.id}')" title="Stop, forget, and clear the GitHub label">Dismiss</button>`;
+  t.innerHTML = a.messages.map(bubble).join("") +
+    (a.busy ? `<div class="text-xs text-muted-foreground">${esc(a.provider)} is working<span class="dots"></span></div>` : "");
+  if (bottom) t.scrollTop = t.scrollHeight;
+  if (ui.pview === "chat" && poll && !agentsCache.some(x => x.busy)) setPoll(false);
+}
+
+async function renderAgents(){
+  const list = await api("/api/agents");
+  $("#ptitle").textContent = "Agents";
+  $("#stages").hidden = true; $("#agentbar").hidden = true;
+  $("#pbody").innerHTML = list.length ? list.map(a => `
+    <div class="card mb-2 p-2.5">
+      <div class="flex items-center gap-1.5">
+        <span class="font-mono text-xs text-muted-foreground">${a.issue.number ? "#" + a.issue.number : "new"}</span>
+        <span class="truncate text-[13px]">${esc(a.issue.title || "")}</span>
+        <span class="ml-auto badge" style="${a.busy ? "color:var(--warning);border-color:var(--warning)66" : "color:hsl(var(--muted-foreground))"}">
+          <span class="dot" style="background:${a.busy ? "var(--warning)" : "hsl(var(--muted-foreground))"}"></span>${a.busy ? "working" : "idle"}</span>
+      </div>
+      <div class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+        <span class="badge">${esc(a.provider)}</span><span class="badge">${esc(a.mode)}</span>
+        ${a.branch ? `<span class="badge font-mono">${esc(a.branch)}</span>` : ""}
+        ${a.pr ? `<a class="badge hover:underline" style="color:var(--s3)" href="${esc(a.pr)}" target="_blank" rel="noopener">PR</a>` : ""}
+      </div>
+      <div class="mt-2 flex flex-wrap gap-1.5">
+        <button class="btn btn-sm" onclick="openAgent('${a.id}','${a.issue.number ? "#" + a.issue.number : "new"}')">Open</button>
+        ${a.worktree ? `<button class="btn btn-sm" onclick="task('launch','${a.id}')">Launch branch</button>
+                        <button class="btn btn-sm" onclick="task('tests','${a.id}')">Tests</button>` : ""}
+        ${a.busy ? `<button class="btn btn-sm" onclick="stopAgent('${a.id}')">Stop</button>` : ""}
+        <button class="btn btn-sm" onclick="dismissAgent('${a.id}')">Dismiss</button>
+      </div>
+    </div>`).join("")
+    : '<div class="py-8 text-center text-muted-foreground">No agents yet.</div>';
+}
+
+async function renderConsole(){
+  const tasks = await api("/api/tasks");
+  $("#ptitle").textContent = "Console";
+  $("#stages").hidden = true;
+  $("#agentbar").hidden = false;
+  $("#agentbar").innerHTML = tasks.slice(-8).reverse().map(t => `
+    <button class="btn btn-sm ${t.id === taskId ? "" : "btn-ghost"}" onclick="openTask('${t.id}')">
+      <span class="dot" style="background:${t.running ? "var(--warning)" : t.exit ? "var(--critical)" : "var(--good)"}"></span>
+      ${esc(t.name)}</button>`).join("") || '<span class="text-muted-foreground">No tasks yet.</span>';
+  if (!taskId) { $("#pbody").innerHTML = '<div class="py-8 text-center text-muted-foreground">Pick a task.</div>'; return; }
+  const t = await api("/api/tasks/" + taskId);
+  const b = $("#pbody"), bottom = b.scrollHeight - b.scrollTop - b.clientHeight < 80;
+  b.innerHTML = `<div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+      <span class="font-mono">${esc(t.where)}</span>
+      ${t.running ? `<button class="btn btn-sm" onclick="stopTask('${t.id}')">Stop</button>`
+                  : `<span class="badge" style="color:${t.exit ? "var(--critical)" : "var(--good)"}">exit ${t.exit}</span>`}</div>
+    <pre class="console">${esc(t.output)}</pre>`;
+  if (bottom) b.scrollTop = b.scrollHeight;
+  if (t.running) setPoll(true);
+}
+
+window.task = async (kind, agent) => {
+  const r = await post("/api/tasks", {kind, agent});
+  if (r.error) { alert(r.error); return; }
+  taskId = r.id; ui.pview = "console"; ui.hidden = "0"; applyUI(); setPoll(true); renderPanel();
+};
+window.stopTask = async id => { await post(`/api/tasks/${id}/stop`); renderPanel(); };
+window.stopAgent = async id => { await post(`/api/agents/${id}/stop`); renderPanel(); };
+window.dismissAgent = async id => {
+  await fetch("/api/agents/" + id, {method: "DELETE"});
+  ui.tabs = ui.tabs.filter(t => t.id !== id);
+  if (ui.active === id) ui.active = ui.tabs.at(-1)?.id || null;
+  applyUI(); renderPanel(); loadIssues({force: true});
+};
+$("#launch").onclick = () => task("launch");
+$("#tests").onclick = () => task("tests");
+$("#killGodot").onclick = () => task("kill");
+
+/* ---------------- composer (with screenshots) ---------------- */
+async function attachImage(file){
+  if (!activeId()) { alert("Open or dispatch an agent first."); return; }
+  const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
+  await post(`/api/agents/${activeId()}/attach`, {dataUrl});
+  renderPanel();
+}
+$("#attach").onclick = () => $("#file").click();
+$("#file").onchange = e => { [...e.target.files].forEach(attachImage); e.target.value = ""; };
+addEventListener("paste", e => {
+  const imgs = [...(e.clipboardData?.items || [])].filter(i => i.type.startsWith("image/"));
+  if (!imgs.length) return;
+  e.preventDefault();
+  imgs.forEach(i => attachImage(i.getAsFile()));
+});
+$("#pbody").addEventListener("dragover", e => e.preventDefault());
+$("#pbody").addEventListener("drop", e => {
+  const f = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith("image/"));
+  if (f.length) { e.preventDefault(); f.forEach(attachImage); }
+});
+
+$("#composer").onsubmit = async e => {
+  e.preventDefault();
+  const text = $("#msg").value.trim();
+  if (!text) return;
+  $("#msg").value = ""; $("#msg").style.height = "auto";
+  if (composing === "new-issue" && !activeId()) {
+    $("#pbody").innerHTML = `<div class="text-muted-foreground">${ui.provider} is drafting the issue<span class="dots"></span></div>`;
+    const a = await post("/api/issues/new", {text, provider: ui.provider, model: ui.model});
+    if (a.error) { $("#pbody").innerHTML = `<div style="color:var(--critical)">${esc(a.error)}</div>`; return; }
+    addTab(a.id, "new"); composing = null; $("#msg").placeholder = "Message the agent…";
+    setPoll(true); return renderPanel();
+  }
+  if (!activeId()) { alert("Dispatch an agent first."); return; }
+  await post(`/api/agents/${activeId()}/message`, {text});
+  setPoll(true); renderPanel();
+};
+$("#msg").addEventListener("input", e => {
+  e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 144) + "px";
+});
+$("#msg").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); }
+});
+
+/* keep the tab strip honest even when nothing is polling: prune dead agents,
+   refresh their busy dots */
+setInterval(async () => {
+  if (!ui.tabs.length) return;
+  agentsCache = await api("/api/agents").catch(() => agentsCache);
+  const before = ui.tabs.length;
+  ui.tabs = ui.tabs.filter(t => agentsCache.some(a => a.id === t.id));
+  if (ui.active && !ui.tabs.some(t => t.id === ui.active)) ui.active = ui.tabs.at(-1)?.id || null;
+  if (before !== ui.tabs.length) { applyUI(); renderPanel(); } else renderTabs();
+}, 5000);
+
+loadTab();
+renderPanel();
+</script>

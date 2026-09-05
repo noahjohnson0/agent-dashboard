@@ -1,0 +1,13 @@
+{
+  "repo": "owner/name",
+  "repoDir": "~/code/my-project",
+  "worktrees": "~/code/my-project-worktrees",
+  "tracker": "ROADMAP.md",
+  "gameHost": "",
+  "launch": ["npm", "run", "dev"],
+  "killPattern": "node",
+  "suites": [
+    ["unit", "npm", "test"],
+    ["lint", "npm", "run", "lint"]
+  ]
+}
