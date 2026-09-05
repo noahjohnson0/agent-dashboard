@@ -605,6 +605,52 @@ def end_process(p):
 
 
 AGENTS, LOCK = {}, threading.Lock()
+AGENT_DIR = os.path.join(STATE_DIR, "agents")
+VOLATILE = ("proc",)          # everything else about an agent is durable
+
+
+def save_agent(a):
+    """Persist an agent so a restart does not lose the conversation. The CLI
+    session id is part of it, so chatting can continue where it left off."""
+    try:
+        os.makedirs(AGENT_DIR, exist_ok=True)
+        tmp = os.path.join(AGENT_DIR, a["id"] + ".tmp")
+        with open(tmp, "w") as f:
+            json.dump({k: v for k, v in a.items() if k not in VOLATILE}, f)
+        os.replace(tmp, os.path.join(AGENT_DIR, a["id"] + ".json"))
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
+def forget_agent(a):
+    try:
+        os.remove(os.path.join(AGENT_DIR, a["id"] + ".json"))
+    except OSError:
+        pass
+
+
+def load_agents():
+    """Restore agents from disk. A turn that was mid-flight when the server went
+    away is reported as interrupted rather than silently dropped."""
+    if not os.path.isdir(AGENT_DIR):
+        return
+    for name in sorted(os.listdir(AGENT_DIR)):
+        if not name.endswith(".json"):
+            continue
+        try:
+            a = json.load(open(os.path.join(AGENT_DIR, name)))
+        except Exception:                                      # noqa: BLE001
+            continue
+        if a.get("repo") and a["repo"] != REPO:      # belongs to another project
+            continue
+        a["proc"] = None
+        if a.get("busy"):
+            a["messages"].append({"role": "system", "text":
+                                  "The dashboard restarted while this turn was running, so it was "
+                                  "interrupted. The conversation is intact — send a message to continue."})
+        a["busy"], a["stopping"], a["dismissed"] = False, False, False
+        AGENTS[a["id"]] = a
+        save_agent(a)
 
 PLAN_PROMPT = """You are working in the {repo} repo on GitHub issue #{num}.
 
@@ -813,6 +859,7 @@ def worker(agent, text):
         if extra:
             agent["messages"].append(extra)
         agent["busy"] = False
+    save_agent(agent)
 
 
 def enqueue(agent, text, show_user=True):
@@ -822,6 +869,7 @@ def enqueue(agent, text, show_user=True):
         if show_user:
             agent["messages"].append({"role": "user", "text": text})
         agent["busy"] = True
+    save_agent(agent)
     threading.Thread(target=worker, args=(agent, text), daemon=True).start()
     return True
 
@@ -838,9 +886,10 @@ def new_agent(**kw):
     a = {"id": uuid.uuid4().hex[:8], "session": None, "busy": False, "stopping": False,
          "proc": None, "kind": "chat", "mode": "plan", "model": "", "messages": [],
          "cwd": REPO_DIR, "worktree": None, "branch": None, "pr": None, "images": [],
-         "started": int(time.time()), **kw}
+         "started": int(time.time()), "repo": REPO, **kw}
     with LOCK:
         AGENTS[a["id"]] = a
+    save_agent(a)
     return a
 
 
@@ -1009,6 +1058,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if wt:
                 note += f"\nWorktree {wt['path']}\nBranch {wt['branch']}"
             agent["messages"].append({"role": "system", "text": note})
+            save_agent(agent)
             prompt = (BUILD_PROMPT if mode == "build" else PLAN_PROMPT).format(
                 repo=REPO, num=number, title=issue.get("title", ""),
                 url=issue.get("url", ""), body=(issue.get("body") or "(no body)")[:6000],
@@ -1105,6 +1155,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 open(dest, "wb").write(base64.b64decode(data[1]))
                 with LOCK:
                     a.setdefault("images", []).append(dest)
+                save_agent(a)
                 return self._json({"path": dest, "pending": len(a["images"])})
         self._send(404, "text/plain", b"not found")
 
@@ -1119,6 +1170,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             stop_agent(a)
             with LOCK:
                 AGENTS.pop(a["id"], None)
+            forget_agent(a)
             cleared = bool(a["issue"].get("number")) and \
                 set_label(a["issue"]["number"], False).returncode == 0
             return self._json({"ok": True, "labelCleared": cleared,
@@ -1132,6 +1184,9 @@ class Server(http.server.ThreadingHTTPServer):
 
 
 if __name__ == "__main__":
+    load_agents()
+    if AGENTS:
+        print(f"restored {len(AGENTS)} agent(s) from {AGENT_DIR}")
     threading.Thread(target=sampler, daemon=True).start()
     with Server(("127.0.0.1", PORT), Handler) as s:
         print(f"sword dashboard: http://localhost:{PORT}")

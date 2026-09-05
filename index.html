@@ -36,6 +36,17 @@ tailwind.config = {
   /* status palette (reserved; always paired with a label) */
   .dark{--good:#0ca30c;--warning:#fab219;--serious:#ec835a;--critical:#d03b3b;
         --s1:#3987e5;--s2:#d95926;--s3:#199e70}
+  /* Tailwind's display utilities outrank the UA rule for [hidden], so anything
+     with .flex stayed visible when hidden — the composer in the Agents view. */
+  [hidden]{display:none!important}
+  /* Chrome paints a wide light scrollbar over a dark page; make it belong. */
+  *::-webkit-scrollbar{width:10px;height:10px}
+  *::-webkit-scrollbar-track,*::-webkit-scrollbar-corner{background:transparent}
+  *::-webkit-scrollbar-thumb{background:hsl(var(--muted));border-radius:9999px;
+    border:3px solid transparent;background-clip:content-box}
+  *::-webkit-scrollbar-thumb:hover{background:hsl(var(--muted-foreground));
+    border:3px solid transparent;background-clip:content-box}
+  *{scrollbar-width:thin;scrollbar-color:hsl(var(--muted)) transparent}
   html,body{height:100%}
   body{background:hsl(var(--background));color:hsl(var(--foreground));
        font-family:Geist,ui-sans-serif,system-ui,sans-serif}
@@ -121,6 +132,8 @@ tailwind.config = {
   details>summary::-webkit-details-marker{display:none}
   details[open] .chev{transform:rotate(90deg)}
   .chev{transition:transform .15s}
+  #msg{overflow-y:hidden;line-height:1.35;scrollbar-width:thin}
+  #msg.tall{overflow-y:auto}
   pre.console{white-space:pre-wrap;word-break:break-word;font-family:'Geist Mono',ui-monospace,monospace;
     font-size:11.5px;line-height:1.5}
   /* vertical stage rail */
@@ -845,7 +858,7 @@ $("#composer").onsubmit = async e => {
   e.preventDefault();
   const text = $("#msg").value.trim();
   if (!text) return;
-  $("#msg").value = ""; $("#msg").style.height = "auto";
+  $("#msg").value = ""; autosize($("#msg"));
   if (composing === "new-issue" && !activeId()) {
     $("#pbody").innerHTML = `<div class="text-muted-foreground">${ui.provider} is drafting the issue<span class="dots"></span></div>`;
     const a = await post("/api/issues/new", {text, provider: ui.provider, model: model()});
@@ -857,9 +870,19 @@ $("#composer").onsubmit = async e => {
   await post(`/api/agents/${activeId()}/message`, {text});
   setPoll(true); renderPanel();
 };
-$("#msg").addEventListener("input", e => {
-  e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 144) + "px";
-});
+const MAX_COMPOSER = 144;
+function autosize(el){
+  el.style.height = "auto";
+  const cs = getComputedStyle(el);
+  // border-box: scrollHeight covers padding but not the border, so add it back
+  // or the last line is clipped and the box scrolls a couple of pixels
+  const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  const wanted = el.scrollHeight + border;
+  el.style.height = Math.min(wanted, MAX_COMPOSER) + "px";
+  el.classList.toggle("tall", wanted > MAX_COMPOSER);   // scrollbar only at the cap
+}
+$("#msg").addEventListener("input", e => autosize(e.target));
+autosize($("#msg"));
 $("#msg").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); }
 });
