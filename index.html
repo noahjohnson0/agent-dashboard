@@ -133,6 +133,9 @@ tailwind.config = {
   .stage[data-done=true]{color:hsl(var(--foreground))}
   .stage[data-done=true]::before{background:var(--good);border-color:var(--good)}
   .stage[data-current=true]{color:hsl(var(--foreground));font-weight:600}
+  .stage[data-failed=true]{color:var(--critical)}
+  .stage[data-failed=true]::before{background:var(--critical);border-color:var(--critical);
+    box-shadow:none;animation:none}
   .stage[data-current=true]::before{background:var(--warning);border-color:var(--warning);
     box-shadow:0 0 0 3px color-mix(in srgb,var(--warning) 25%,transparent);animation:p 1.4s ease-in-out infinite}
   @keyframes p{50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--warning) 10%,transparent)}}
@@ -184,7 +187,9 @@ tailwind.config = {
           <button class="btn btn-sm px-2" data-mode="plan" data-active="true">Plan</button>
           <button class="btn btn-sm px-2" data-mode="build">Build</button>
         </div>
-        <input id="model" class="inp btn-sm w-24" placeholder="model" title="Optional model override">
+        <select id="model" class="inp btn-sm" title="Model the agent runs with"></select>
+        <input id="modelCustom" class="inp btn-sm w-32" placeholder="model id" hidden
+               title="Exact model id passed to the CLI">
         <span class="mx-1 h-4 w-px bg-border"></span>
         <button id="launch" class="btn btn-sm" hidden title="Run the configured launch command in the main checkout">
           <svg class="i" viewBox="0 0 24 24"><path d="m6 3 14 9-14 9Z"/></svg>Launch</button>
@@ -286,13 +291,12 @@ function applyUI(){
   $("#pin").setAttribute("aria-pressed", ui.pinned === "1");
   $("#expand").hidden = ui.main === "1";
   $("#pin").hidden = $("#dockGroup").hidden = ui.main === "0";
-  if ($("#model").value !== ui.model) $("#model").value = ui.model;
+  renderModels();
   try { localStorage.setItem("agentDashboardUI", JSON.stringify(ui)); } catch(e){}
 }
 $$("#dockGroup .btn").forEach(b => b.onclick = () => { ui.dock = b.dataset.dock; applyUI(); });
 $$("#providerGroup .btn").forEach(b => b.onclick = () => { ui.provider = b.dataset.provider; applyUI(); });
 $$("#modeGroup .btn").forEach(b => b.onclick = () => { ui.mode = b.dataset.mode; applyUI(); });
-$("#model").oninput = e => { ui.model = e.target.value; applyUI(); };
 const model = () => (ui.model || "").trim();
 $("#pin").onclick = () => { ui.pinned = ui.pinned === "1" ? "0" : "1"; applyUI(); };
 $("#collapse").onclick = () => { ui.main = "0"; ui.hidden = "0"; applyUI(); };
@@ -300,6 +304,28 @@ $("#expand").onclick = () => { ui.main = "1"; applyUI(); };
 $("#close").onclick = () => { ui.hidden = "1"; applyUI(); };
 $("#show").onclick = () => { ui.hidden = "0"; applyUI(); };
 $$("#tabs .btn").forEach(b => b.onclick = () => { ui.tab = b.dataset.tab; applyUI(); loadTab(); });
+/* Free text here meant a typo reached the CLI and the whole turn failed with
+   "that model may not exist". Presets per provider, custom only on purpose. */
+const MODELS = {claude: ["opus", "sonnet", "haiku"],
+                codex:  ["gpt-5-codex", "gpt-5", "gpt-5-mini"]};
+
+function renderModels(){
+  const sel = $("#model"), custom = $("#modelCustom");
+  const presets = MODELS[ui.provider] || [];
+  const known = ui.model === "" || presets.includes(ui.model);
+  sel.innerHTML = `<option value="">default model</option>` +
+    presets.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("") +
+    `<option value="__custom">custom…</option>`;
+  sel.value = known ? ui.model : "__custom";
+  custom.hidden = known;
+  if (!known && custom.value !== ui.model) custom.value = ui.model;
+}
+$("#model").onchange = e => {
+  if (e.target.value === "__custom") { $("#modelCustom").hidden = false; $("#modelCustom").focus(); return; }
+  ui.model = e.target.value; applyUI();
+};
+$("#modelCustom").oninput = e => { ui.model = e.target.value; applyUI(); };
+
 const isChat = () => ui.pview === "chat";
 window.showView = v => { ui.pview = v; applyUI(); renderPanel(); };
 
@@ -675,8 +701,9 @@ function bubble(m){
 
 function stageRail(stages){
   if (!stages?.length) return "";
-  return `<div class="rail">${stages.map(s => `<div class="stage" data-done="${s.done}" data-current="${s.current}">
-    ${s.done ? "✓ " : ""}${esc(s.name)}</div>`).join("")}</div>`;
+  return `<div class="rail">${stages.map(s => `<div class="stage" data-done="${s.done}"
+    data-current="${s.current}" data-failed="${!!s.failed}">
+    ${s.done ? "✓ " : s.failed ? "! " : ""}${esc(s.name)}</div>`).join("")}</div>`;
 }
 
 async function renderPanel(){

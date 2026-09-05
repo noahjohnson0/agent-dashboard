@@ -662,11 +662,18 @@ STAGE_SIGNS = {
 
 
 def stages_for(agent):
-    """Progress checklist shown at the top of the chat panel."""
+    """Progress checklist shown at the top of the chat panel.
+
+    Stages are a sequence, so they are reported monotonically: reaching a later
+    one means the earlier ones happened, and a failed turn advances nothing."""
     names = BUILD_STAGES if agent["mode"] == "build" else PLAN_STAGES
     if agent["kind"] == "new-issue":
         names = ["Describe", "Research repo", "File issue"]
-    blob = "\n".join(m["text"] for m in agent["messages"] if m["role"] != "user")
+    replies = [m for m in agent["messages"] if m["role"] not in ("user", "system")]
+    failed = bool(replies) and replies[-1]["role"] == "error"
+    blob = "\n".join(m["text"] for m in replies if m["role"] != "error")
+    answered = any(m["role"] not in ("error",) for m in replies)
+
     done = []
     for n in names:
         if n == "Worktree":
@@ -678,12 +685,15 @@ def stages_for(agent):
         elif n == "File issue":
             done.append(bool(agent["issue"].get("url")))
         elif n in ("Plan", "Research repo"):
-            done.append(not agent["busy"] and len(agent["messages"]) > 1)
+            done.append(answered and not agent["busy"] and not failed)
         else:
             done.append(bool(STAGE_SIGNS[n].search(blob)) if n in STAGE_SIGNS else False)
-    # current = first not-done stage while the agent is working
+
+    last = max((i for i, d in enumerate(done) if d), default=-1)   # fill the gaps
+    done = [i <= last for i in range(len(done))]
     cur = next((i for i, d in enumerate(done) if not d), None)
-    return [{"name": n, "done": d, "current": agent["busy"] and i == cur}
+    return [{"name": n, "done": d, "current": agent["busy"] and i == cur,
+             "failed": failed and i == cur}
             for i, (n, d) in enumerate(zip(names, done))]
 
 
@@ -728,7 +738,12 @@ def run_claude(agent, text):
         raise RuntimeError((err or f"claude exited {code}").strip()[:2000])
     payload = json.loads(out)
     agent["session"] = payload.get("session_id") or agent["session"]
-    return payload.get("result") or "(no output)"
+    text = payload.get("result") or "(no output)"
+    if payload.get("is_error") or code != 0:
+        # the CLI reports a failed turn in-band (bad model, auth, limits): it is
+        # an error, not an answer, and must not advance the agent's stages
+        raise RuntimeError(text.strip()[:2000])
+    return text
 
 
 def run_codex(agent, text):
