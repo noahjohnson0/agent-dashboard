@@ -125,7 +125,7 @@ tailwind.config = {
   .col-comments{flex:0 0 2.25rem;display:flex;align-items:center;gap:.15rem}
   .col-author{flex:0 0 5.5rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .col-time{flex:0 0 4.75rem;text-align:right;white-space:nowrap}
-  .col-act{flex:0 0 1.75rem}
+  .col-act{flex:0 0 2rem}      /* matches .btn-icon, or every column shifts 4px */
   #listHead{position:sticky;top:49px;z-index:5;background:hsl(var(--background));
     border-bottom:1px solid hsl(var(--border))}
   /* narrow window: drop the columns that repeat themselves before the title suffers */
@@ -149,6 +149,17 @@ tailwind.config = {
   .msg-att{display:flex;flex-wrap:wrap;gap:.375rem;margin-top:.375rem}
   .msg-att img{max-height:5rem;border-radius:6px;border:1px solid hsl(var(--border));display:block}
   .msg-att a{font-size:11px;color:hsl(var(--muted-foreground));text-decoration:underline}
+  .att-img{cursor:zoom-in}
+  #lightbox{position:fixed;inset:0;z-index:60;display:grid;place-items:center;gap:.5rem;
+    background:rgb(0 0 0/.72);backdrop-filter:blur(2px);padding:3rem;grid-auto-rows:min-content}
+  #lightbox img{max-width:min(92vw,1400px);max-height:82vh;object-fit:contain;
+    border-radius:var(--radius);border:1px solid hsl(var(--border));background:hsl(var(--card))}
+  #lightboxName{font-size:12px;color:#fff;opacity:.8;text-align:center}
+  #lightboxClose{position:fixed;top:1rem;right:1rem;background:hsl(var(--card))}
+  #hoverPreview{position:fixed;z-index:55;pointer-events:none;padding:4px;
+    border:1px solid hsl(var(--border));border-radius:calc(var(--radius) - 2px);
+    background:hsl(var(--card));box-shadow:0 12px 32px rgb(0 0 0/.5)}
+  #hoverPreview img{display:block;max-width:240px;max-height:240px;border-radius:4px}
   #panel.dropping::after{content:"Drop files for this agent";position:absolute;inset:8px;z-index:40;
     display:grid;place-items:center;pointer-events:none;border:2px dashed hsl(var(--ring));
     border-radius:var(--radius);background:hsl(var(--background)/.85);
@@ -310,6 +321,14 @@ tailwind.config = {
     </form>
   </aside>
 </div>
+<div id="lightbox" hidden>
+  <img id="lightboxImg" alt="">
+  <div id="lightboxName"></div>
+  <button id="lightboxClose" class="btn btn-icon" title="Close (Esc)">
+    <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+</div>
+<div id="hoverPreview" hidden><img alt=""></div>
+
 <button id="show" class="btn btn-primary fixed bottom-4 right-4 z-30">
   <svg class="i" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>Chat</button>
 
@@ -493,11 +512,11 @@ function render(mode = "cascade"){
          title="${esc(i.title)}">${esc(i.title)}</a>
       <span class="col-status">${statusChip(i)}</span>
       <span class="col-labels">${labelChips(i.labels)}</span>
-      <span class="col-author text-xs text-muted-foreground"
-            title="${esc(i.author?.login || "unknown")}">${esc(clip(i.author?.login || "?", 12))}</span>
       <span class="col-comments text-xs text-muted-foreground"
             title="${i.comments?.length || 0} comment${i.comments?.length === 1 ? "" : "s"}">${
         i.comments?.length ? CHAT_ICON + i.comments.length : ""}</span>
+      <span class="col-author text-xs text-muted-foreground"
+            title="${esc(i.author?.login || "unknown")}">${esc(clip(i.author?.login || "?", 12))}</span>
       <span class="col-time text-xs text-muted-foreground"
             title="updated ${new Date(i.updatedAt).toLocaleString()}">${ago(i.updatedAt)}</span>
       ${i.agentId ? `<button class="btn btn-sm btn-icon shrink-0" title="Open this agent" onclick="openAgent('${i.agentId}','#${i.number}')">${BOT}</button>`
@@ -794,6 +813,52 @@ $("#newIssue").onclick = () => {
 const FILE_ICON = '<svg class="i h-4 w-4" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
 const kb = n => n > 1024 * 1024 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
 
+/* Click any attachment image for a full view; hover for a peek. One delegated
+   handler covers the composer strip and every message in the transcript. */
+const lightbox = $("#lightbox"), hoverPreview = $("#hoverPreview");
+let hoverTimer = null;
+
+function openLightbox(src, name){
+  hidePreview();
+  $("#lightboxImg").src = src;
+  $("#lightboxImg").alt = name || "";
+  $("#lightboxName").textContent = name || "";
+  lightbox.hidden = false;
+}
+function closeLightbox(){ lightbox.hidden = true; $("#lightboxImg").removeAttribute("src"); }
+lightbox.addEventListener("click", e => { if (e.target === lightbox) closeLightbox(); });
+$("#lightboxClose").onclick = closeLightbox;
+addEventListener("keydown", e => { if (e.key === "Escape" && !lightbox.hidden) closeLightbox(); });
+
+function showPreview(img){
+  const pv = hoverPreview, pic = pv.querySelector("img");
+  pic.src = img.dataset.full;
+  pv.hidden = false;
+  const r = img.getBoundingClientRect(), pad = 10;
+  requestAnimationFrame(() => {
+    const w = pv.offsetWidth, h = pv.offsetHeight;
+    let left = r.left + r.width / 2 - w / 2;
+    let top = r.top - h - pad;
+    if (top < pad) top = Math.min(r.bottom + pad, innerHeight - h - pad);
+    pv.style.left = Math.max(pad, Math.min(left, innerWidth - w - pad)) + "px";
+    pv.style.top = Math.max(pad, top) + "px";
+  });
+}
+function hidePreview(){ clearTimeout(hoverTimer); hoverPreview.hidden = true; }
+
+document.addEventListener("click", e => {
+  const img = e.target.closest?.(".att-img");
+  if (img && img.dataset.full) { e.preventDefault(); openLightbox(img.dataset.full, img.dataset.name); }
+});
+document.addEventListener("mouseover", e => {
+  const img = e.target.closest?.(".att-img");
+  if (!img || !img.dataset.full || !lightbox.hidden) return;
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => showPreview(img), 220);
+});
+document.addEventListener("mouseout", e => { if (e.target.closest?.(".att-img")) hidePreview(); });
+addEventListener("scroll", hidePreview, true);
+
 /* An upload can be cleaned up later; show the name rather than a broken image. */
 window.attGone = img => {
   const s = document.createElement("span");
@@ -807,7 +872,9 @@ function renderAttachbar(list){
   bar.hidden = !list?.length;
   if (bar.hidden) return;
   bar.innerHTML = list.map(a => `<span class="thumb" title="${esc(a.name)} · ${kb(a.size)}">
-    ${a.image ? `<img src="/api/uploads/${encodeURIComponent(a.file)}" alt="">`
+    ${a.image ? `<img class="att-img" src="/api/uploads/${encodeURIComponent(a.file)}"
+         alt="${esc(a.name)}" data-full="/api/uploads/${encodeURIComponent(a.file)}"
+         data-name="${esc(a.name)}" onerror="attGone(this)">`
               : `<span class="fileicon">${FILE_ICON}</span>`}
     <span class="nm">${esc(a.name)}</span>
     <button class="rm" title="Remove" onclick="dropAttachment('${esc(a.file)}')">×</button></span>`).join("");
@@ -823,9 +890,9 @@ function bubble(m){
   const linked = esc(m.text).replace(/https?:\/\/\S+/g,
     u => `<a class="underline" href="${u}" target="_blank" rel="noopener">${u}</a>`);
   const att = (m.attachments || []).map(a => a.image
-    ? `<a href="/api/uploads/${encodeURIComponent(a.file)}" target="_blank" rel="noopener">
-         <img src="/api/uploads/${encodeURIComponent(a.file)}" alt="${esc(a.name)}"
-              title="${esc(a.name)}" onerror="attGone(this)"></a>`
+    ? `<img class="att-img" src="/api/uploads/${encodeURIComponent(a.file)}" alt="${esc(a.name)}"
+           title="${esc(a.name)}" data-full="/api/uploads/${encodeURIComponent(a.file)}"
+           data-name="${esc(a.name)}" onerror="attGone(this)">`
     : `<a href="/api/uploads/${encodeURIComponent(a.file)}" target="_blank" rel="noopener">${esc(a.name)}</a>`).join("");
   return `<div class="mb-3 ${mine ? "text-right" : ""}">
     <div class="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">${mine ? "you" : esc(m.role)}</div>
